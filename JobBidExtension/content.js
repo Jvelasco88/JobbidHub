@@ -56,6 +56,8 @@
       window.postMessage({ __jobbid: 'version', version: v, auto }, location.origin);
     };
     try { stamp(null); chrome.runtime.sendMessage({ type: 'extInfo' }).then((r) => stamp(!!r?.auto)).catch(() => {}); } catch { /* extension reloading */ }
+    // A React site that rebuilds the page drops the mark: put it back.
+    setInterval(() => { try { if (!document.documentElement.hasAttribute('data-jobbid-version') && chrome.runtime?.id) stamp(null); } catch { /* cut off */ } }, 3000);
   }
 
   // When the extension is reloaded or updated, scripts already running in open tabs lose their
@@ -2865,9 +2867,11 @@
         </div>
       </div>`;
     (document.documentElement || document.body).appendChild(host);
-    // An old copy of JobBid left on the page by an update removes "#jobbid-root" by id: put ours back.
-    new MutationObserver(() => { if (!host.isConnected && !dead && alive()) (document.documentElement || document.body).appendChild(host); })
-      .observe(document.documentElement, { childList: true });
+    // Thrown out of the page (an old copy of JobBid after an update, or a React site rebuilding the whole
+    // page, see panel.js): put it back.
+    const keepUi = () => { if (!host.isConnected && !dead && alive()) (document.documentElement || document.body).appendChild(host); };
+    new MutationObserver(keepUi).observe(document.documentElement, { childList: true });
+    setInterval(keepUi, 1500);
     self.jbI18n?.observe(root);
     const $r = (s) => root.querySelector(s);
     $r('.fill').addEventListener('click', () => fill());

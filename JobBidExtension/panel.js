@@ -653,14 +653,19 @@
       <button class="tab" id="tab" title="Open JobBid panel"><img src="${LOGO}" alt=""><span class="tb" id="tabBadge"></span></button>
     </div>`;
   (document.documentElement || document.body).appendChild(host);
-  // After an update, the old copy of JobBid still on this page (cut off from the extension) removes
-  // "#jobbid-root-panel" by its id when it notices: put this copy's panel back and push the page aside again.
-  new MutationObserver(() => {
+  // The panel can be thrown out of the page: by an old copy of JobBid left there by an update (it removes
+  // "#jobbid-root-panel" by id), or by React sites that rebuild the whole page when they find something they
+  // did not draw (Greenhouse's job-boards pages, Remix: "React recovered from an error during hydration").
+  // Put it back, and push the page aside again. Checked on changes and every 1.5 s (the page itself may be new).
+  const keepPanel = () => {
     if (host.isConnected || !api.alive()) return;
     (document.documentElement || document.body).appendChild(host);
     pushed = '';
     render();
-  }).observe(document.documentElement, { childList: true });
+  };
+  new MutationObserver(keepPanel).observe(document, { childList: true, subtree: false });
+  new MutationObserver(keepPanel).observe(document.documentElement, { childList: true });
+  setInterval(keepPanel, 1500);
   const $ = (id) => root.getElementById(id);
   self.jbI18n?.observe(root);
 

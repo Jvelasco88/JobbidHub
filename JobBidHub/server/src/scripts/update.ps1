@@ -12,10 +12,19 @@ function Write-Log($m) { try { Add-Content -Path $Log -Value ('{0:yyyy-MM-dd HH:
 function Get-Ver($s) { try { [version]$s } catch { [version]'0.0' } }
 try {
   New-Item -ItemType Directory -Force -Path $Tool | Out-Null
-  # A hub on the local network is reached directly (a proxy can't reach it); an internet address uses the normal route.
-  $w = New-Object System.Net.WebClient
-  if ($Hub -match '^https?://(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)') { $w.Proxy = $null }  # local hub: past any proxy
-  $info = $w.DownloadString("$Hub/api/extension/info") | ConvertFrom-Json
+  # The hub on this PC first (its address never changes), then the address it was installed with: a free
+  # Cloudflare address changes whenever the hub restarts, so on its own it stops working.
+  $w = $null; $info = $null; $errs = @()
+  foreach ($h in @('http://127.0.0.1:4417', $Hub) | Select-Object -Unique) {
+    try {
+      $c = New-Object System.Net.WebClient
+      # A hub on this PC or the local network is reached directly (a proxy can't reach it).
+      if ($h -match '^https?://(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)') { $c.Proxy = $null }
+      $info = $c.DownloadString("$h/api/extension/info") | ConvertFrom-Json
+      $w = $c; $Hub = $h; break
+    } catch { $errs += "${h}: $($_.Exception.Message)" }
+  }
+  if (-not $info) { throw ($errs -join ' | ') }
   $mf = Join-Path $Dest 'manifest.json'
   $have = '0'
   if (Test-Path $mf) { $have = (Get-Content $mf -Raw | ConvertFrom-Json).version }
