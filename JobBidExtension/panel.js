@@ -484,6 +484,9 @@
       .fixlive.ok { border-color:rgba(22,163,74,.35); background:rgba(22,163,74,.1); color:var(--ok); }
       .fixlive.held { border-color:rgba(109,40,217,.4); background:rgba(109,40,217,.12); color:#6d28d9; }
       .fixlive.err { border-color:rgba(220,38,38,.3); background:rgba(220,38,38,.08); color:var(--err); }
+      .fixlive.warn { border-color:rgba(217,119,6,.35); background:rgba(217,119,6,.1); color:#b45309; display:flex; align-items:flex-start; gap:8px; }
+      .bidst { margin-top:8px; }
+      .bidst .t2 { margin-top:2px; }
       .fixlive > svg { width:16px; height:16px; flex:none; }
       .fixlive.ok, .fixlive.held, .fixlive.err { display:flex; align-items:flex-start; gap:8px; }
       @keyframes fixin { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
@@ -1186,12 +1189,36 @@
   // Refresh while the tab is on screen.
   setInterval(() => { if (data.panelTab === 'auto' && document.visibilityState === 'visible' && !data.hubConfig?.offline) loadBid(); }, 5000);
 
+  // "Auto-apply this job": what it is doing right now, and how it ended, right under the button.
+  // content.js reports each step through window.__jobbidBidStatus (same page, same extension world).
+  let bidLocal = null; // { text, note, kind: 'run' | 'ok' | 'warn' | 'err' }
+  const bidHereButton = (style) => bidLocal?.kind === 'run'
+    ? `<button class="fill" id="bidHere" disabled style="width:100%;box-sizing:border-box;opacity:.7;cursor:default;${style}">${svg('bolt')}Auto-applying...</button>`
+    : `<button class="fill" id="bidHere" style="width:100%;box-sizing:border-box;${style}">${svg('bolt')}Auto-apply this job</button>`;
+  function bidStatusHtml() {
+    const b = bidLocal;
+    if (!b) return '<div id="bidStatus"></div>';
+    if (b.kind === 'run') {
+      return `<div id="bidStatus" class="fixlive bidst"><div class="fixrow"><b class="fixdots">${esc(b.text)}</b></div>${b.note ? `<div class="fixstage">${esc(b.note)}</div>` : ''}</div>`;
+    }
+    return `<div id="bidStatus" class="fixlive bidst ${b.kind}">${svg(b.kind === 'ok' ? 'check' : 'alert')}<div class="grow"><b>${esc(b.text)}</b>${b.note ? `<div class="t2">${esc(b.note)}</div>` : ''}</div></div>`;
+  }
+  window.__jobbidBidStatus = (st) => {
+    bidLocal = st;
+    const el = $('bidStatus');
+    if (!el) return;
+    el.outerHTML = bidStatusHtml();
+    const btn = $('bidHere');
+    if (btn) { btn.outerHTML = bidHereButton(btn.style.marginTop ? `margin-top:${btn.style.marginTop}` : ''); bindBidHere(); }
+  };
+
   function autoTab() {
     // Offline: only this page (the queue lives in the hub).
     if (data.hubConfig?.offline) return `<div class="card">
         <div class="grp">This page</div>
         <div class="bseg"><button data-omode="review" class="${offMode !== 'auto' ? 'on' : ''}">Review first</button><button data-omode="auto" class="${offMode === 'auto' ? 'on' : ''}">Full auto</button></div>
-        <button class="fill" id="bidHere" style="width:100%;box-sizing:border-box;margin-top:10px">${svg('bolt')}Auto-apply this job</button>
+        ${bidHereButton('margin-top:10px')}
+        ${bidStatusHtml()}
         <div class="t2" style="margin-top:6px">As ${esc(pname(activeProfile()))} · ${offMode === 'auto' ? 'presses Apply, fills, AI answers the rest, then submits' : 'presses Apply, fills and lets AI answer the rest - you press Submit'}.</div>
         <div class="t2" style="margin-top:6px">The auto-bid queue needs the hub - it is back when you go online.</div>
       </div>`;
@@ -1208,7 +1235,8 @@
     return `
       <div class="card">
         <div class="grp">This page</div>
-        <button class="fill" id="bidHere" style="width:100%;box-sizing:border-box">${svg('bolt')}Auto-apply this job</button>
+        ${bidHereButton('')}
+        ${bidStatusHtml()}
         <div class="t2" style="margin-top:6px">As ${esc(pname(activeProfile()))} · ${c.mode === 'auto' ? 'presses Apply, fills, AI answers the rest, then submits' : 'presses Apply, fills and lets AI answer the rest - you press Submit'}. Works on any site.</div>
       </div>
       <div class="card">
@@ -1238,10 +1266,17 @@
       <div class="t2" style="text-align:center">Applies to Qualified jobs on Greenhouse, Lever and Ashby. Keep Chrome open.</div>`;
   }
 
+  function bindBidHere() {
+    $('bidHere')?.addEventListener('click', () => {
+      if (bidLocal?.kind === 'run') return;
+      api.autoBid({ mode: (data.hubConfig?.offline ? offMode : bidView?.config.mode) === 'auto' ? 'auto' : 'review', local: true });
+    });
+  }
+
   function bindAutoTab() {
     $('bidGo')?.addEventListener('click', () => (bidView?.config.running ? bidAct('stop') : bidAct('start', { profileIds: bidView.config.profileIds })));
     $('bidPage')?.addEventListener('click', () => openPage('#autobid'));
-    $('bidHere')?.addEventListener('click', () => api.autoBid({ mode: (data.hubConfig?.offline ? offMode : bidView?.config.mode) === 'auto' ? 'auto' : 'review', local: true }));
+    bindBidHere();
     root.querySelectorAll('[data-omode]').forEach((b) => b.addEventListener('click', () => { offMode = b.dataset.omode; render(); }));
     root.querySelectorAll('.bidPro').forEach((b) => b.addEventListener('change', () => {
       const ids = [...root.querySelectorAll('.bidPro')].filter((x) => x.checked).map((x) => x.dataset.pid);

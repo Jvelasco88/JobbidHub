@@ -23,6 +23,8 @@ npm test -- --show        # watch it in a visible window
    - `{ ..., "contains": "555" }`: the value only has to contain this
    - `"noProblems": ["Location (City)"]`: these questions must not be reported to the hub as problems
    - `"mustReport": ["Location (City)"]`: these questions must be reported (the filler could not answer them)
+   - `"autoBid": "auto"` (or `"review"`) with `"bidStatus": "review"`: run Auto bid on the form instead of a plain Fill and check its result (`submitted`, `review`, `needs`...)
+   - `<script type="application/json" id="profile">{ "customAnswers": {...} }</script>`: change the test candidate for this form only
 4. Run `npm test`. The new form should fail before your fix and pass after it.
 
 `profile.json` is made-up test data. Never put a real candidate's details in this folder (it goes into git).

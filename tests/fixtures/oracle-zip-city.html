@@ -1,0 +1,73 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Apply - Oracle Recruiting Cloud (cx-select ZIP and City)</title></head><body>
+<!-- 2026-11-07: Oracle Cloud HCM (hccz.fa.em3.oraclecloud.com). ZIP Code and City are "cx-select" search boxes:
+     input role=combobox aria-haspopup=grid, suggestions as a grid (row / gridcell). Typing the ZIP shows
+     "60623, Chicago, Cook, IL"; only clicking that row (or Arrow Down + Enter) chooses it. City's list is
+     filled from the chosen ZIP. JobBid typed the ZIP, never chose the row, and both stayed empty. -->
+<form onsubmit="return false">
+  <div class="input-row"><label for="postalCode-9"><span class="input-row__label-text">ZIP Code<span aria-hidden="true">*</span></span></label>
+    <div class="cx-select-container"><div class="input-field-container"><div class="input-field-container__left">
+      <input autocomplete="none" name="postalCode" id="postalCode-9" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="grid" aria-controls="postalCode-9-listbox" aria-expanded="false" aria-required="true" class="cx-select-input">
+    </div><div class="input-field-container__right"><button type="button" tabindex="-1" aria-label="Open the drop-down list for ZIP Code." class="icon-dropdown-arrow"></button></div></div></div>
+    <span id="zip-chosen" hidden></span>
+  </div>
+  <div class="input-row"><label for="city-10"><span class="input-row__label-text">City<span aria-hidden="true">*</span></span></label>
+    <div class="cx-select-container"><div class="input-field-container"><div class="input-field-container__left">
+      <input autocomplete="none" name="city" id="city-10" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="grid" aria-controls="city-10-listbox" aria-expanded="false" aria-required="true" class="cx-select-input">
+    </div><div class="input-field-container__right"><button type="button" tabindex="-1" aria-label="Open the drop-down list for City." class="icon-dropdown-arrow"></button></div></div></div>
+    <span id="city-chosen" hidden></span>
+  </div>
+</form>
+<script>
+  const ZIPS = { '60606': '60606, Chicago, Cook, IL', '60623': '60623, Chicago, Cook, IL', '62701': '62701, Springfield, Sangamon, IL' };
+  let cities = []; // filled once a ZIP is chosen
+  function cxSelect(input, chosen, source) {
+    let list = null, active = -1, items = [], timer;
+    const close = () => { list?.remove(); list = null; active = -1; input.setAttribute('aria-expanded', 'false'); };
+    const choose = (text) => { input.value = text; chosen.textContent = text; input.setAttribute('aria-invalid', 'false'); close(); input.dispatchEvent(new CustomEvent('cx-chosen', { detail: text })); };
+    const show = () => {
+      close();
+      if (!items.length) return;
+      list = document.createElement('ul');
+      list.id = input.getAttribute('aria-controls');
+      list.setAttribute('role', 'grid');
+      list.className = 'cx-select__list';
+      items.forEach((t, i) => {
+        const li = document.createElement('li');
+        li.setAttribute('role', 'row');
+        li.id = `${list.id}-option-${i}`;
+        li.className = 'cx-select__list-item';
+        const [head, ...rest] = t.split(', ');
+        li.innerHTML = `<div role="gridcell" class="cx-select__list-item--content"><span class="cx-select__list-item--highlighted">${head}</span>${rest.length ? ', ' + rest.join(', ') : ''}</div>`;
+        // Oracle picks on mouseup over the row (click alone also works there).
+        li.addEventListener('mousedown', (e) => e.preventDefault());
+        li.addEventListener('click', () => choose(t));
+        list.append(li);
+      });
+      input.closest('.cx-select-container').append(list);
+      input.setAttribute('aria-expanded', 'true');
+    };
+    input.addEventListener('input', () => {
+      chosen.textContent = '';
+      clearTimeout(timer);
+      const q = input.value.trim().toLowerCase();
+      timer = setTimeout(() => { items = q ? source().filter((t) => t.toLowerCase().includes(q)) : []; show(); }, 300);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (!list) return;
+      if (e.key === 'ArrowDown') { active = Math.min(items.length - 1, active + 1); }
+      if (e.key === 'Enter' && active >= 0) { e.preventDefault(); choose(items[active]); }
+      if (e.key === 'Escape') close();
+    });
+    // Leaving the box without choosing a row clears it, like Oracle.
+    input.addEventListener('blur', () => setTimeout(() => { if (!chosen.textContent) { input.value = ''; close(); } }, 200));
+  }
+  const zip = document.getElementById('postalCode-9'), city = document.getElementById('city-10');
+  cxSelect(zip, document.getElementById('zip-chosen'), () => Object.values(ZIPS));
+  cxSelect(city, document.getElementById('city-chosen'), () => cities);
+  zip.addEventListener('cx-chosen', (e) => { cities = [e.detail.split(', ')[1]]; });
+</script>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "ZIP chosen from the suggestion", "sel": "#zip-chosen", "text": "60606, Chicago, Cook, IL" },
+  { "name": "City chosen (its list comes from the ZIP)", "sel": "#city-chosen", "text": "Chicago" }
+] }</script>
+</body></html>

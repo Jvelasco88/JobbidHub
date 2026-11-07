@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Full auto: an unchecked AI answer stops at Review</title></head><body>
+<!-- The saved answer to the cloud question was written by the AI and nobody checked it (aiGuessKeys). Full auto must fill it but not press Submit. -->
+<form id="f" onsubmit="event.preventDefault(); document.body.innerHTML = '<h1>Thank you for applying!</h1><p>We have received your application.</p>';">
+  <div><label for="fn">First Name *</label><input id="fn" name="first_name" required></div>
+  <div><label for="ln">Last Name *</label><input id="ln" name="last_name" required></div>
+  <div><label for="em">Email *</label><input id="em" type="email" name="email" required></div>
+  <div><label for="cloud">Which cloud platform have you used the most? *</label>
+    <select id="cloud" name="cloud" required><option value="">Select...</option><option>AWS</option><option>Google Cloud</option><option>Azure</option></select></div>
+  <button type="submit">Submit application</button>
+</form>
+<script type="application/json" id="profile">{ "customAnswers": { "Which cloud platform have you used the most?": "AWS" }, "aiGuessKeys": ["Which cloud platform have you used the most?"] }</script>
+<script type="application/json" id="expect">{ "autoBid": "auto", "bidStatus": "review", "checks": [ { "name": "Cloud filled from the saved answer", "sel": "#cloud", "value": "AWS" }, { "name": "Not submitted", "sel": "#f", "contains": "" } ] }</script>
+</body></html>

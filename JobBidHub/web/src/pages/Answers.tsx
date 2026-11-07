@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { MessageSquareText, Search as SearchIcon, Trash2, Plus, Check, CircleDashed } from 'lucide-react';
+import { MessageSquareText, Search as SearchIcon, Trash2, Plus, Check, CircleDashed, Sparkles } from 'lucide-react';
 import { api, refresh, useBoot, profileName } from '../api';
 import { usePrefs } from '../prefs';
 import { Avatar, Badge, Button, Empty, Field, IconButton, Input, Modal, PageHeader, Segmented, Select, Textarea, cx, useAction } from '../components/ui';
@@ -13,18 +13,20 @@ export default function Answers() {
   const profiles = boot?.profiles || [];
   const pid = params.get('profile') || prefs.profileId || profiles[0]?.id || '';
   const p = profiles.find((x) => x.id === pid) || profiles[0];
-  const [filter, setFilter] = useState<'all' | 'open' | 'done'>(params.get('open') ? 'open' : 'all');
+  const [filter, setFilter] = useState<'all' | 'open' | 'done' | 'ai'>(params.get('open') ? 'open' : params.get('ai') ? 'ai' : 'all');
   const [q, setQ] = useState('');
   const [adding, setAdding] = useState(false);
   const { run } = useAction();
 
+  // Answers the AI guessed that nobody checked yet: Full auto won't send a form with one of them.
+  const guess = useMemo(() => new Set<string>(p?.aiGuessKeys || []), [p]);
   const rows = useMemo(() => {
     const ans = p?.customAnswers || {};
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     return Object.entries(ans)
-      .filter(([k, v]) => (filter === 'all' || (filter === 'open' ? !String(v || '').trim() : !!String(v || '').trim())) && words.every((w) => `${k} ${v}`.toLowerCase().includes(w)))
+      .filter(([k, v]) => (filter === 'all' || (filter === 'ai' ? guess.has(k) : filter === 'open' ? !String(v || '').trim() : !!String(v || '').trim())) && words.every((w) => `${k} ${v}`.toLowerCase().includes(w)))
       .sort(([a, va], [b, vb]) => Number(!!String(va || '').trim()) - Number(!!String(vb || '').trim()) || a.localeCompare(b));
-  }, [p, filter, q]);
+  }, [p, filter, q, guess]);
   const openN = Object.values(p?.customAnswers || {}).filter((v) => !String(v || '').trim()).length;
 
   const patch = (body: any) => run('p', async () => { await api(`/profiles/${p!.id}/answers`, { method: 'PATCH', body }); refresh('boot'); });
@@ -46,6 +48,7 @@ export default function Answers() {
               { value: 'all', label: t('All') },
               { value: 'open', label: <>{t('Need answer')}{openN ? <Badge tone="warn" className="!px-1">{openN}</Badge> : null}</> },
               { value: 'done', label: t('Answered') },
+              ...(guess.size ? [{ value: 'ai' as const, label: <>{t('AI guesses')}<Badge tone="accent" className="!px-1">{guess.size}</Badge></> }] : []),
             ]} />
             <div className="relative min-w-[200px] flex-1">
               <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
@@ -59,6 +62,7 @@ export default function Answers() {
             <div className="flex flex-col gap-2">
               {rows.map(([question, answer]) => (
                 <AnswerRow key={question} question={question} answer={String(answer ?? '')} options={p.answerOptions?.[question]}
+                  aiGuess={guess.has(question)} onConfirm={() => patch({ confirm: [question] })}
                   onSave={(a) => patch({ set: { [question]: a } })}
                   onDelete={() => confirm(t('Delete this saved answer?')) && patch({ remove: [question] })} />
               ))}
@@ -71,7 +75,7 @@ export default function Answers() {
   );
 }
 
-function AnswerRow({ question, answer, options: raw, onSave, onDelete }: { question: string; answer: string; options?: string[]; onSave: (a: string) => void; onDelete: () => void }) {
+function AnswerRow({ question, answer, options: raw, aiGuess, onConfirm, onSave, onDelete }: { question: string; answer: string; options?: string[]; aiGuess?: boolean; onConfirm: () => void; onSave: (a: string) => void; onDelete: () => void }) {
   const { t } = usePrefs();
   // Saved options can be blank (the form's option words weren't readable): then it's a text box.
   const clean = (raw || []).map((o) => String(o ?? '').trim()).filter(Boolean);
@@ -85,7 +89,10 @@ function AnswerRow({ question, answer, options: raw, onSave, onDelete }: { quest
     <div className={cx('card flex flex-col gap-2 px-4 py-3 md:flex-row md:items-start', open && 'border-warn/30')}>
       <div className="flex min-w-0 items-start gap-2.5 md:w-[45%]">
         {open ? <CircleDashed className="mt-0.5 size-4 shrink-0 text-warn" /> : <Check className="mt-0.5 size-4 shrink-0 text-good" />}
-        <div className="min-w-0 text-[13.5px] font-medium leading-snug">{question}</div>
+        <div className="min-w-0 text-[13.5px] font-medium leading-snug">
+          {question}
+          {aiGuess && !open && <div className="mt-1"><Badge tone="accent" title={t('Written by the AI and not checked yet. Full auto will not send a form with it until you check it.')}><Sparkles className="size-3" />{t('AI guess - check it')}</Badge></div>}
+        </div>
       </div>
       <div className="flex min-w-0 flex-1 items-start gap-2">
         {options?.length ? (
@@ -98,6 +105,7 @@ function AnswerRow({ question, answer, options: raw, onSave, onDelete }: { quest
             onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) onSave(v); }} />
         )}
         {changed && !options?.length && <Button size="sm" variant="primary" onClick={() => onSave(v)}>{t('Save')}</Button>}
+        {aiGuess && !open && !changed && <Button size="sm" icon={<Check className="size-3.5" />} onClick={onConfirm}>{t('Looks right')}</Button>}
         <IconButton label={t('Delete')} onClick={onDelete}><Trash2 className="size-4" /></IconButton>
       </div>
     </div>

@@ -1456,16 +1456,21 @@ async function handle(msg, sender) {
       const p = profiles.find((x) => x.id === msg.profileId);
       if (p) {
         const answers = { ...(p.customAnswers || {}) };
+        // fromAI: the AI's guess, marked until a person checks it (Answers page). A person's own answer clears the mark.
+        const guess = new Set(p.aiGuessKeys || []);
         for (const [q, a] of Object.entries(msg.answers)) {
           // Replace an existing entry for the same question (e.g. a pending one) instead of duplicating it.
           const old = Object.keys(answers).find((k) => questionKey(k) === questionKey(q));
           if (old && old !== q) {
             delete answers[old];
+            guess.delete(old);
             if (p.answerOptions?.[old]) { p.answerOptions[q] = p.answerOptions[old]; delete p.answerOptions[old]; }
           }
           answers[q] = a;
+          if (msg.fromAI) guess.add(q); else guess.delete(q);
         }
         p.customAnswers = answers;
+        p.aiGuessKeys = [...guess];
         await saveProfiles(profiles);
       }
       return { ok: true };

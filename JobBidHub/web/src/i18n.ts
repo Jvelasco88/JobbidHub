@@ -938,6 +938,10 @@ const ROWS: [string, string, string][] = [
   ['If this application was sent, log it in Applications first - otherwise a later Start may apply to it again. Remove it?', '이 지원서가 전송되었다면 먼저 지원 내역에 기록하세요. 그렇지 않으면 다음 시작 때 다시 지원할 수 있습니다. 삭제할까요?', '如果此申请已发送，请先在申请记录中登记，否则之后开始时可能再次申请。要删除吗？'],
   ['Fix the cause (AI keys, proxy, the site), then press Start.', '원인(AI 키, 프록시, 사이트)을 해결한 뒤 시작을 누르세요.', '请先解决原因（AI 密钥、代理或网站），然后点击开始。'],
   ['Auto bid stopped by itself', '자동 지원이 스스로 멈췄습니다', '自动投递已自行停止'],
+  ['AI guesses', 'AI 추측', 'AI 猜测'],
+  ['Written by the AI and not checked yet. Full auto will not send a form with it until you check it.', 'AI가 작성했고 아직 확인되지 않았습니다. 확인하기 전까지 완전 자동은 이 답변이 있는 양식을 보내지 않습니다.', '由 AI 填写，尚未检查。检查之前，全自动不会发送包含此答案的表单。'],
+  ['AI guess - check it', 'AI 추측 - 확인하세요', 'AI 猜测 - 请检查'],
+  ['Looks right', '맞습니다', '没问题'],
 ];
 
 export const DICT: Record<Exclude<Lang, 'en'>, Record<string, string>> = { ko: {}, zh: {} };

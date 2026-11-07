@@ -223,7 +223,8 @@ export default async function autobidRoutes(app) {
     }
     if (!cfg.running) return { idle: true, config: cfg };
     if (db.getDb().prepare('SELECT 1 FROM bids WHERE owner_id = ? AND status = \'running\'').get(ownerId)) return { busy: true, config: cfg };
-    if (cfg.mode === 'review' && Number(req.query.openReviews || 0) >= MAX_OPEN_REVIEWS) return { wait: 30000, why: `${MAX_OPEN_REVIEWS} filled forms are waiting for you to submit`, config: cfg };
+    // Also in Full auto: forms held back for a check (AI guesses) stay open for you there too.
+    if (Number(req.query.openReviews || 0) >= MAX_OPEN_REVIEWS) return { wait: 30000, why: `${MAX_OPEN_REVIEWS} filled forms are waiting for you to submit`, config: cfg };
     const waitMs = cfg.nextAt ? new Date(cfg.nextAt) - Date.now() : 0;
     if (waitMs > 0) return { wait: waitMs, why: 'Pause between applications', config: cfg };
 

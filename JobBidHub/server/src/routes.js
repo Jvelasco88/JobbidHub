@@ -147,9 +147,14 @@ export default async function routes(app, { version }) {
   app.patch('/api/profiles/:id/answers', async (req) => {
     mustSee(req, req.params.id);
     const p = need(db.getProfile(req.params.id), 'Profile');
-    const { set = {}, remove = [], rename } = req.body || {};
+    const { set = {}, remove = [], rename, confirm = [] } = req.body || {};
     p.customAnswers = { ...(p.customAnswers || {}) };
     p.answerOptions = { ...(p.answerOptions || {}) };
+    // Answers the AI guessed stay marked until a person sets, confirms or removes them (Full auto won't
+    // send a form with one unchecked).
+    const guess = new Set(p.aiGuessKeys || []);
+    for (const q of [...Object.keys(set), ...remove, ...confirm, ...(rename?.from ? [rename.from] : [])]) guess.delete(q);
+    p.aiGuessKeys = [...guess];
     if (rename?.from && rename?.to && rename.from !== rename.to) {
       p.customAnswers[rename.to] = p.customAnswers[rename.from] ?? '';
       if (p.answerOptions[rename.from]) p.answerOptions[rename.to] = p.answerOptions[rename.from];
@@ -159,7 +164,7 @@ export default async function routes(app, { version }) {
     for (const [q, a] of Object.entries(set)) p.customAnswers[q] = String(a ?? '');
     for (const q of remove) { delete p.customAnswers[q]; delete p.answerOptions[q]; }
     db.saveProfile(p);
-    return { customAnswers: p.customAnswers, answerOptions: p.answerOptions };
+    return { customAnswers: p.customAnswers, answerOptions: p.answerOptions, aiGuessKeys: p.aiGuessKeys };
   });
 
   // Resume files are stored like the extension stores them: base64 under file_<id>.

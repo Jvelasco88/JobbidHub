@@ -49,6 +49,8 @@ function fakeChrome(profile) {
       case 'takeFixedResume': return { ok: true, file: null };
       case 'savePendingQuestions': return { ok: true, added: 0 };
       case 'fillReport': reports.push(msg.report); return { ok: true };
+      case 'autoBidResult': window.__jbBidResult = msg.result; return { ok: true };
+      case 'logApplication': window.__jbLogged = (window.__jbLogged || 0) + 1; return { ok: true };
       case 'checkApplied': return { ok: true, matches: [] };
       case 'takePendingFill': return { ok: true, pending: null };
       default: return { ok: true };
@@ -65,6 +67,13 @@ function fakeChrome(profile) {
     },
     storage: { onChanged: { addListener() {} }, local: { get: async () => ({}), set: async () => {} } },
   };
+  // Full auto / Review like the hub's queue: resolves with the result the tab would report.
+  window.__jbBid = (mode) => new Promise((resolve) => {
+    for (const f of listeners) f({ type: 'autoBid', mode }, {}, () => {});
+    const t0 = Date.now();
+    const wait = () => (window.__jbBidResult ? resolve({ ok: true, result: window.__jbBidResult }) : Date.now() - t0 > 120000 ? resolve({ ok: false, error: 'timeout' }) : setTimeout(wait, 300));
+    wait();
+  });
   window.__jbFill = () => new Promise((resolve) => {
     let done = false;
     for (const f of listeners) f({ type: 'fill', noApply: true }, {}, (r) => { done = true; resolve(r); });
@@ -99,14 +108,23 @@ for (const file of files) {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(process.env.STACK ? e.stack : e.message));
-  await page.evaluateOnNewDocument(fakeChrome, profile);
+  // A form may change the test candidate (e.g. saved answers): <script id="profile" type="application/json">.
+  const html = fs.readFileSync(path.join(FIX, file), 'utf8');
+  const extra = html.match(/<script type="application\/json" id="profile">([\s\S]*?)<\/script>/);
+  await page.evaluateOnNewDocument(fakeChrome, extra ? { ...profile, ...JSON.parse(extra[1]) } : profile);
   const t0 = Date.now();
+  const results0 = [];
   try {
     await page.goto(base + file, { waitUntil: 'load' });
     const expect = await page.$eval('#expect', (s) => JSON.parse(s.textContent));
     await page.addScriptTag({ content });
-    const r = await page.evaluate(() => window.__jbFill());
-    const results = await page.evaluate(readBack, expect.checks);
+    // "autoBid": "auto" | "review" runs Auto bid on the page instead of a plain Fill, and checks its result.
+    const r = expect.autoBid ? await page.evaluate((m) => window.__jbBid(m), expect.autoBid) : await page.evaluate(() => window.__jbFill());
+    if (expect.autoBid) {
+      const want = expect.bidStatus;
+      results0.push({ name: 'Auto bid result', want, got: r.result?.status + (r.result?.reason ? ` (${r.result.reason.slice(0, 90)})` : ''), ok: r.result?.status === want });
+    }
+    const results = [...results0, ...(await page.evaluate(readBack, expect.checks || []))];
     const reports = await page.evaluate(() => window.__jbReports);
     // Problems the filler reported that the form says it must not (e.g. a field the site allows empty).
     const probs = (reports[0]?.problems || []).filter((p) => (expect.noProblems || []).some((q) => p.q.toLowerCase().includes(q.toLowerCase())));

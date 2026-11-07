@@ -351,7 +351,7 @@
     { re: /(applied|been referred) (to|for|with) .{0,60}(past|last) \d+ (months?|years?)|referred to .{0,40}for another (role|position)|have you (ever )?(previously )?applied (to|for|with) (this|our|us)\b.{0,40}(before|past|previously)?/, ex: /how many|which|what|when/, value: () => 'No' },
     { re: /relatives?|family members?.{0,30}(work|employ)|related to (anyone|an employee)/, key: 'relatives', value: (p) => yn(p.relatives) },
     // "Have you been employed by Capgemini Group before?" too. Default No (the profile's own answer wins).
-    { re: /(previously|ever|formerly) (worked|been employed)|former employee|worked (for|at) .{0,30} (before|previously)|been employed (by|with|at) .{0,50}(before|in the past|previously)|worked (for|at) .{0,40}in the past/, key: 'workedHereBefore', value: (p) => yn(p.workedHereBefore) || 'No' },
+    { re: /(previously|ever|formerly) (worked|been employed)|former employee|worked (for|at) .{0,30} (before|previously)|been employed (by|with|at) .{0,50}(before|in the past|previously)|worked (for|at) .{0,40}in the past|(currently|presently) (work|working|employed) (at|for|by|with) |in the (past|last) .{0,20}(months?|years?) .{0,30}(worked|been employed|work) (at|for|by|with) /, key: 'workedHereBefore', value: (p) => yn(p.workedHereBefore) || 'No' },
     // "This role requires travel... Are you able and willing to travel as needed?" Default Yes.
     { re: /(able|willing) (and (able|willing) )?to travel|willingness to travel|requires? (some )?travel/, ex: /percent|%|how much|how often/, value: (p) => (p.willingToTravel != null && p.willingToTravel !== '' ? yn(p.willingToTravel) : 'Yes') },
     { re: /countr(y|ies).{0,40}(want|like|wish|prefer|willing|open|interested|able) to work|(want|like|prefer|willing) to work in|preferred (work )?countr|countries (of|for) work/, ex: /hybrid|remote|on ?site|office|shifts?|weekends?|nights?|hours|environment|team|fast paced|startup/, key: 'workCountries', value: (p) => p.workCountries || p.country },
@@ -1115,7 +1115,7 @@
     await sleep(500);
     const id = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
     const lb = id && (el.getRootNode().getElementById?.(id) || document.getElementById(id));
-    const opts = (lb ? [...lb.querySelectorAll('[role="option"], .select__option')] : visibleOptions()).filter(isVisible);
+    const opts = (lb ? [...lb.querySelectorAll('[role="option"], .select__option, [role="row"]')] : visibleOptions()).filter(isVisible);
     // A chosen item shown as a chip ("Cursor ✕") is not one of the options.
     const chip = (o) => /[✕×✖⨯]\s*$/.test(textOf(o)) || o.closest?.('[class*="chip" i],[class*="tag" i],[class*="pill" i],[class*="token" i]');
     f.options = [...new Set(opts.filter((o) => !chip(o)).map(textOf).filter((t) => t && !PLACEHOLDER.test(t)))].slice(0, 60);
@@ -1490,7 +1490,8 @@
   }
 
   function visibleOptions() {
-    return deepQueryAll('[role="option"], li[data-automation-id="promptOption"], .select__option')
+    // Oracle Recruiting's cx-select lists its suggestions as rows of a grid (role=grid, row, gridcell).
+    return deepQueryAll('[role="option"], li[data-automation-id="promptOption"], .select__option, [role="grid"][id*="listbox" i] [role="row"], .cx-select__list [role="row"]')
       .filter(isVisible);
   }
 
@@ -1568,8 +1569,8 @@
       const id = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
       const lb = id && (el.getRootNode().getElementById?.(id) || document.getElementById(id));
       const inBox = (root) => {
-        const role = [...root.querySelectorAll('[role="option"], .select__option, [class*="option" i]:not([class*="options" i])')]
-          .filter((o) => isVisible(o) && textOf(o).length < 120 && !o.querySelector('[role="option"]'));
+        const role = [...root.querySelectorAll('[role="option"], .select__option, [class*="option" i]:not([class*="options" i]), [role="row"]')]
+          .filter((o) => isVisible(o) && textOf(o).length < 120 && !o.querySelector('[role="option"], [role="row"]'));
         return role;
       };
       if (lb) { const own = inBox(lb); if (own.length) return own; }
@@ -2158,6 +2159,7 @@
       if (v && (await apply(f, v))) {
         n++;
         mark(f, 'ai');
+        aiTouched.set(f.el, { q: cleanQ(f.label || f.hint || ''), kind: f.kind });
         if (f.label && (f.kind !== 'textarea' || (!JOB_SPECIFIC.test(norm(f.label)) && !letterLike(v)))) toCache[cleanQ(f.label)] = v;
       }
     };
@@ -2179,7 +2181,7 @@
       }
     }
     if (typing) focusBack(typing);
-    if (Object.keys(toCache).length) send({ type: 'saveAnswers', profileId: p.id, answers: toCache });
+    if (Object.keys(toCache).length) send({ type: 'saveAnswers', profileId: p.id, answers: toCache, fromAI: true });
     const missed = todo.length - n - skipped;
     const who = p.label || p.fullName || 'the candidate';
     const notInResume = blank ? `${blank === 1 ? 'One question is' : `${blank} questions are`} not covered by ${who}'s resume, so the AI left ${blank === 1 ? 'it' : 'them'} empty (it never makes up experience). Answer ${blank === 1 ? 'it' : 'them'} yourself, or add the experience to the profile.` : '';
@@ -2531,6 +2533,9 @@
   // ---------- Main fill ----------
 
   let filling = false;
+  // Boxes on this page answered by the AI (now, or from an AI answer saved earlier that no person checked yet).
+  // Full auto does not send a form with one of these unless it is an essay box (see runBid).
+  const aiTouched = new Map(); // element -> { q, kind }
 
   async function fill({ resumeId, noApply, noAutoSubmit } = {}) {
     if (filling) return;
@@ -2568,6 +2573,7 @@
       const slow = []; // boxes that took over 1.5 s (for the hub: where fill time goes)
       const started = performance.now();
       const answers = Object.fromEntries(Object.entries(p.customAnswers || {}).map(([k, v]) => [answerKey(k), v]));
+      const aiGuess = new Set((p.aiGuessKeys || []).map(answerKey));
       const fileFields = fields.filter((f) => f.kind === 'file');
       // A resume fixed for this job on its posting page goes in instead of the usual one (unless one was picked).
       const fixed = !resumeId && fileFields.length ? (await send({ type: 'takeFixedResume', profileId: p.id })).file : null;
@@ -2622,7 +2628,10 @@
         if (ms > 1500) slow.push({ q: cleanQ(f.label || f.hint || '').slice(0, 160), kind: f.kind, ms, ok: !!ok });
         if (ok) {
           filled++;
-          mark(f, 'rule');
+          // The saved answer was an AI guess nobody checked: purple, and Full auto treats it as an AI answer.
+          const guessed = saved != null && v === saved && aiGuess.has(answerKey(f.label));
+          mark(f, guessed ? 'ai' : 'rule');
+          if (guessed) aiTouched.set(f.el, { q: cleanQ(f.label || ''), kind: f.kind });
           done.push({ f, v, ms });
           continue;
         }
@@ -2715,6 +2724,11 @@
     if (!btn || !stillComplete()) return;
     if (appliedState.matches.some((m) => m.profileId === p.id)) {
       return toast({ kind: 'warn', title: 'Auto-submit skipped', msg: `${p.label || p.fullName} already applied to this job.`, ms: 8000 });
+    }
+    // Same rule as Full auto: nothing the AI guessed for a fact goes out unchecked.
+    const guessed = [...aiTouched].filter(([el, x]) => el.isConnected && x.kind !== 'textarea');
+    if (guessed.length) {
+      return toast({ kind: 'warn', title: 'Auto-submit skipped', msg: `The AI answered ${guessed.length} question${guessed.length === 1 ? '' : 's'} (purple). Check ${guessed.length === 1 ? 'it' : 'them'}, then submit yourself.`, ms: 10000 });
     }
     let left = 1; // short pause so Cancel is still possible
     let cancelled = false;
@@ -3370,9 +3384,14 @@
     .map((e) => (e.getAttribute('aria-invalid') === 'true' ? labelFor(e) + ' is invalid' : textOf(e)))
     .filter((t) => t && t.length < 160);
 
+  // Each step, for the status line under "Auto-apply this job" in the side panel.
+  const bidStatus = (text, note = '', kind = 'run') => { try { window.__jobbidBidStatus?.({ text, note, kind }); } catch { /* no panel */ } };
+
   async function runBid(mode) {
+    bidStatus('Looking for the application form');
     let fields = await waitForForm(needsApplyClick() ? 3000 : 15000);
     if (!fields && needsApplyClick()) {
+      bidStatus('Pressing Apply', 'Opening the application form');
       const r = await openApplication();
       if (r === 'away') return new Promise(() => {}); // the next page carries on and reports
       fields = r === 'form' ? formFields() : await waitForForm(5000);
@@ -3386,15 +3405,19 @@
     const p = ctx.profile;
     if (!ctx.ok || !p) return { status: 'failed', reason: ctx.error || 'No profile' };
 
+    aiTouched.clear();
+    bidStatus('Filling the form', `As ${p.label || p.fullName}`);
     // Fill twice: some questions appear only after earlier answers.
     await fill({ noApply: true, noAutoSubmit: true });
     await sleep(1500);
+    bidStatus('Filling the form', 'Second pass: questions that appeared after the first answers');
     await fill({ noApply: true, noAutoSubmit: true });
     await sleep(1000);
 
     let missing = requiredMissing();
     const askable = missing.filter((f) => f.kind !== 'file');
     if (askable.length) {
+      bidStatus(`Asking the AI (${askable.length} question${askable.length === 1 ? '' : 's'})`, askable.slice(0, 3).map((f) => cleanQ(f.label || f.hint)).filter(Boolean).join(' · '));
       const r = await aiAnswerNow(askable);
       if (r && r.ok === false && r.error) toast({ kind: 'warn', title: 'Auto bid: AI problem', msg: r.error, ms: 8000 });
       await sleep(1000);
@@ -3405,6 +3428,14 @@
       return { status: 'needs', reason: `${missing.length} required question${missing.length === 1 ? '' : 's'} not answered: ${names.join(' · ')}`.slice(0, 480), detail: { questions: names } };
     }
 
+    // Full auto sends nothing the AI guessed for a fact (yes/no, a choice, years, salary...): a wrong
+    // "Yes, I have a clearance" goes to the employer. AI-written essay answers may still go.
+    const guessed = [...aiTouched].filter(([el, x]) => el.isConnected && x.kind !== 'textarea').map(([, x]) => x.q || 'A question');
+    if (mode === 'auto' && guessed.length) {
+      toast({ kind: 'warn', title: 'Auto bid: check the AI answers', msg: `The AI answered ${guessed.length} question${guessed.length === 1 ? '' : 's'} (purple). Check ${guessed.length === 1 ? 'it' : 'them'}, then press Submit.`, ms: 0 });
+      return { status: 'review', reason: `Not sent: the AI answered ${guessed.length} question${guessed.length === 1 ? '' : 's'} - check before submitting: ${guessed.slice(0, 4).join(' · ')}`.slice(0, 480), detail: { aiQuestions: guessed.slice(0, 10) } };
+    }
+
     if (mode !== 'auto') {
       toast({ kind: 'ok', title: 'Auto bid: ready for you', msg: `Filled as ${p.label || p.fullName}. Check the answers, then press Submit.`, ms: 0 });
       return { status: 'review', reason: 'Filled. Check it and press Submit.' };
@@ -3413,6 +3444,7 @@
     const btn = findSubmitButton(collectFields());
     if (!btn) return { status: 'needs', reason: 'No final Submit button found (a form with several pages?).' };
     if (captchaShown()) return { status: 'needs', reason: 'A captcha must be solved by you.' };
+    bidStatus('Submitting', 'Waiting for the site to confirm (up to 30 seconds)');
     const before = location.href;
     const thanksBefore = BID_SUCCESS.test(document.body.innerText || '');
     promptedFor = location.href; // logged below, so don't also ask "Did you submit?"
@@ -3457,6 +3489,10 @@
       bidRunning = false;
       localBidMode = '';
     }
+    // The result stays under the panel's button.
+    const KIND = { submitted: 'ok', review: 'ok', needs: 'warn', skipped: 'warn', failed: 'err' };
+    const TITLE = { submitted: 'Application submitted', review: 'Ready for you to check and submit', needs: 'Needs you', skipped: 'Skipped', failed: 'Auto-apply failed' };
+    bidStatus(TITLE[result.status] || result.status, result.reason || '', KIND[result.status] || 'warn');
     if (!local) return send({ type: 'autoBidResult', result: { ...result, url: location.href } });
     const T = { submitted: ['ok', 'Application submitted'], review: ['ok', 'Ready for you'], needs: ['warn', 'Needs you'], skipped: ['warn', 'Skipped'], failed: ['err', 'Auto-apply failed'] }[result.status] || ['warn', result.status];
     if (result.status !== 'review') toast({ kind: T[0], title: T[1], msg: result.reason || 'Done.', ms: 12000 });

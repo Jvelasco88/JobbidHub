@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Application - "worked here" questions in many wordings</title></head><body>
+<!-- 2026-11-07: "Are you currently working at Cognizant, or, in the past 12 months have you worked at Cognizant
+     on a Pearson account?" was left empty. The answer to every "do/did you work here" question is the profile's
+     "worked here before" answer (No for the test candidate). -->
+<form onsubmit="return false">
+  <fieldset><legend>Are you currently working at Cognizant, or, in the past 12 months have you worked at Cognizant on a Pearson account? *</legend>
+    <label><input type="radio" name="q1" value="Yes" required> Yes</label><label><input type="radio" name="q1" value="No"> No</label></fieldset>
+  <fieldset><legend>Have you previously worked for Example Corp? *</legend>
+    <label><input type="radio" name="q2" value="Yes" required> Yes</label><label><input type="radio" name="q2" value="No"> No</label></fieldset>
+  <fieldset><legend>In the last 2 years, have you been employed by Acme or any of its subsidiaries? *</legend>
+    <label><input type="radio" name="q3" value="Yes" required> Yes</label><label><input type="radio" name="q3" value="No"> No</label></fieldset>
+  <fieldset><legend>Are you presently employed by a staffing agency that placed you at this client? *</legend>
+    <label><input type="radio" name="q4" value="Yes" required> Yes</label><label><input type="radio" name="q4" value="No"> No</label></fieldset>
+  <fieldset><legend>Are you legally authorized to work in the United States? *</legend>
+    <label><input type="radio" name="q5" value="Yes" required> Yes</label><label><input type="radio" name="q5" value="No"> No</label></fieldset>
+</form>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "Currently / past 12 months at Cognizant", "sel": "input[name=q1]", "picked": "No" },
+  { "name": "Previously worked for", "sel": "input[name=q2]", "picked": "No" },
+  { "name": "In the last 2 years employed by", "sel": "input[name=q3]", "picked": "No" },
+  { "name": "Presently employed by an agency", "sel": "input[name=q4]", "picked": "No" },
+  { "name": "Work authorization is not this question", "sel": "input[name=q5]", "picked": "Yes" }
+] }</script>
+</body></html>
