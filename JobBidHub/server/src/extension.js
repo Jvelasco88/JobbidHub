@@ -11,7 +11,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const EXT_DIR = process.env.JOBBID_EXT_DIR || path.resolve(here, '../../../JobBidExtension');
 const SKIP = /(^|\/)(\.git|node_modules|\.DS_Store|Thumbs\.db|hub\.json|updater\.json)$/i;
 
-function listFiles(dir, base = '') {
+export function listFiles(dir, base = '') {
   const out = [];
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const rel = base ? `${base}/${e.name}` : e.name;
@@ -23,7 +23,7 @@ function listFiles(dir, base = '') {
 }
 
 // A plain zip file (deflate), enough for Chrome's "Load unpacked" after extracting.
-function zip(entries) {
+export function zip(entries) {
   const locals = [], centrals = [];
   let offset = 0;
   const now = new Date();

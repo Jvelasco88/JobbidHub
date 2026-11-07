@@ -11,6 +11,23 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Open the dashboard in Google Chrome (where JobBid is installed) once the server has had a moment to start.
+rem Windows' default browser is not used: on some PCs no program is set for web links ("Application not found").
+set "HUB_URL=http://localhost:4417"
+set "CHROME="
+for %%P in ("%ProgramFiles%\Google\Chrome\Application\chrome.exe" "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" "%LocalAppData%\Google\Chrome\Application\chrome.exe") do (
+  if not defined CHROME if exist %%P set "CHROME=%%~P"
+)
+
+rem Already running in the background (service\install-service.ps1): just open the dashboard.
+powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:4417/api/health -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul
+if not errorlevel 1 (
+  echo JobBid Hub is already running in the background. Opening the dashboard...
+  if defined CHROME ( start "" "%CHROME%" %HUB_URL% ) else ( start "" %HUB_URL% )
+  timeout /t 3 /nobreak >nul
+  exit /b 0
+)
+
 if not exist "server\node_modules" (
   echo Installing the server ^(first run only^)...
   pushd server
@@ -28,13 +45,6 @@ if not exist "web\dist\index.html" (
   popd
 )
 
-rem Open the dashboard in Google Chrome (where JobBid is installed) once the server has had a moment to start.
-rem Windows' default browser is not used: on some PCs no program is set for web links ("Application not found").
-set "HUB_URL=http://localhost:4417"
-set "CHROME="
-for %%P in ("%ProgramFiles%\Google\Chrome\Application\chrome.exe" "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" "%LocalAppData%\Google\Chrome\Application\chrome.exe") do (
-  if not defined CHROME if exist %%P set "CHROME=%%~P"
-)
 if defined CHROME (
   start "" /min cmd /c "timeout /t 3 /nobreak >nul & start "" "%CHROME%" %HUB_URL%"
 ) else (

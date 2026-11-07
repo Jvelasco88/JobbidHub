@@ -4,10 +4,13 @@
 !/README.md
 !/JobBidExtension/
 !/JobBidHub/
+!/store/
 
 # Hub data: database, encryption key, settings (backed up separately, never in git)
 /JobBidHub/data/
 /JobBidHub/backups/
+/JobBidHub/logs/
+/JobBidHub/release/
 # Downloaded tools and build output
 /JobBidHub/tools/
 node_modules/

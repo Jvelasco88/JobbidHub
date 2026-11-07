@@ -1202,6 +1202,8 @@ const newerVer = (a, b) => { const x = verNum(a), y = verNum(b); for (let i = 0;
 
 async function extUpdateCheck() {
   const running = chrome.runtime.getManifest().version;
+  // Installed from the Chrome Web Store (it adds update_url): Chrome updates it, the hub's copy is not used.
+  if (chrome.runtime.getManifest().update_url) return chrome.storage.local.set({ extUpdate: null });
   // 1. New files on disk (put there by the updater): reload, but not in the middle of an auto-bid job.
   const onDisk = await fetch(chrome.runtime.getURL('manifest.json'), { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
   if (onDisk?.version && newerVer(onDisk.version, running)) {

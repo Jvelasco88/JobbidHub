@@ -11,7 +11,8 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/index.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/"
+    "test": "node --disable-warning=ExperimentalWarning --test test/",
+    "pack-store": "node --disable-warning=ExperimentalWarning scripts/pack-store.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
