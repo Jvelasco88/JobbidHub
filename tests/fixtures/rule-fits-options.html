@@ -1,0 +1,43 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Application - questions the wrong rule used to answer</title></head><body>
+<!-- Real questions from the hub's Problems page where a rule matched a word in the question and gave an answer
+     of the wrong kind (a job title for Yes/No, the gender for a consent, a state for "able to work"). -->
+<form onsubmit="return false">
+  <div class="field"><label for="fn">First Name *</label><input id="fn" name="first_name" required></div>
+  <div class="field"><label for="em">Email *</label><input id="em" name="email" type="email" required></div>
+  <div class="field"><label for="region">Are you able to legally work in the region you are applying for? *</label>
+    <select id="region" required><option value="">Select...</option><option>Yes</option><option>No</option></select></div>
+  <div class="field"><label for="permit">Are you legally permitted to work in the country where this job is located? *</label>
+    <select id="permit" required><option value="">Select...</option><option>Yes</option><option>No</option></select></div>
+  <div class="field"><label for="consent">I give my explicit consent for Capgemini Group to collect and process my sensitive personal data, such as gender and ethnicity, for equal opportunity monitoring. *</label>
+    <select id="consent" required><option value="">Select...</option><option>I consent</option><option>I do not consent</option></select></div>
+  <div class="field"><label for="sms">Would you like to receive communications via SMS and/or WhatsApp to the phone number provided? *</label>
+    <select id="sms" required><option value="">Select...</option><option>Yes</option><option>No</option></select></div>
+  <div class="field"><label for="curpos">Is current position?</label>
+    <select id="curpos"><option value="">Select...</option><option>Yes</option><option>No</option></select></div>
+  <div class="field"><label for="otp1">Digit 1 of 6</label><input id="otp1" maxlength="1"></div>
+  <div class="field"><label for="hear">How did you first hear about this opportunity? *</label>
+    <select id="hear" required><option value="">Select...</option><option>LinkedIn</option><option>Indeed</option><option>Other</option></select></div>
+  <div class="field"><label for="comp">Will you be employed or volunteering with a non competitor while employed here?</label>
+    <select id="comp"><option value="">Select...</option><option>Yes</option><option>No</option></select></div>
+  <div class="field"><label for="tf">Do you have production experience with Terraform?</label>
+    <select id="tf"><option value="">Select...</option><option>Yes</option><option>No</option></select></div>
+</form>
+<script type="application/json" id="profile">{ "gender": "Male", "customAnswers": {
+  "Digit 1 of 6": "4",
+  "How did you hear about this opportunity?": "Indeed",
+  "Will you be employed or volunteering with a competitor while employed here?": "No",
+  "Do you have production experience with Kubernetes?": "Yes"
+} }</script>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "First Name", "sel": "#fn", "value": "Alex" },
+  { "name": "Able to work in the region (not the state)", "sel": "#region", "value": "Yes" },
+  { "name": "Legally permitted to work", "sel": "#permit", "value": "Yes" },
+  { "name": "Data consent (not the gender)", "sel": "#consent", "value": "I consent" },
+  { "name": "SMS / WhatsApp (not the email)", "sel": "#sms", "value": "Yes" },
+  { "name": "Is current position: not the job title", "sel": "#curpos", "value": "" },
+  { "name": "Verification code digit: never an old saved code", "sel": "#otp1", "value": "" },
+  { "name": "Saved answer to the same question in other words", "sel": "#hear", "value": "Indeed" },
+  { "name": "\"non competitor\" is not \"competitor\"", "sel": "#comp", "value": "" },
+  { "name": "Terraform is not Kubernetes", "sel": "#tf", "value": "" }
+] }</script>
+</body></html>

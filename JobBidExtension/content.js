@@ -125,6 +125,51 @@
     return k.slice(0, 120);
   };
 
+  // A verification code ("Digit 1 of 6", "Enter the code we sent you"): new every time, never saved or reused.
+  const ONE_TIME = /\bdigit \d+ of \d+\b|verification code|confirmation code|one ?time (pass ?)?(code|password)|\botp\b|passcode|security code|enter (the )?(\d+ ?digit )?code/;
+  const isOneTime = (f) => ONE_TIME.test(norm(`${f.label || ''} ${f.hint || ''}`));
+
+  // Words that carry the meaning of a question, for "same question, other words" matching.
+  const Q_STOP = new Set('a an the of to in for and or at on with by is are you your do does have has be been this that our we us as from will would please if any can select one following which'.split(' '));
+  const qWords = (k) => new Set(answerKey(k).split(' ').filter((w) => w.length > 1 && !Q_STOP.has(w)));
+  // Numbers and single letters tell questions apart ("Digit 1 of 6" / "Digit 2 of 6", "Response A" / "Response B").
+  const qNumbers = (k) => (answerKey(k).match(/\b(\d+|[a-hj-z])\b/g) || []).join(' ');
+  const qNegated = (k) => /\b(not|no|non|never|without|none|unable|cannot|t)\b/.test(answerKey(k));
+  // The saved question this box takes its answer from: the same words, else a question worded almost the
+  // same ("How did you first hear about this opportunity?" / "How did you hear about this opportunity?",
+  // "...text message updates from Arine" / "...from Mapbox"). Only when no other saved question comes as
+  // close, the numbers are the same ("Digit 1 of 6" is not "Digit 2 of 6") and both ask it the same way
+  // round (one with "not" is the opposite question). Never for essays: those differ per job.
+  const wordCache = new WeakMap(); // the saved questions' words, worked out once per fill
+  function savedKey(f, answers) {
+    if (!usefulLabel(f.label) || isOneTime(f)) return null;
+    const k = answerKey(f.label);
+    if (k.length <= 3) return null;
+    if (answers[k] !== undefined) return k;
+    if (f.kind === 'textarea') return null;
+    const qw = qWords(f.label);
+    if (qw.size < 3) return null;
+    let best = null, bestScore = 0, second = 0;
+    let list = wordCache.get(answers);
+    if (!list) {
+      // Not a date ("11/05/2026" for "earliest start date" is out of date on the next form).
+      list = Object.entries(answers).filter(([, v]) => v != null && String(v).trim() !== '' && !/\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}/.test(String(v)))
+        .map(([key]) => [key, qWords(key)]);
+      wordCache.set(answers, list);
+    }
+    for (const [key, kw] of list) {
+      let common = 0;
+      for (const w of qw) if (kw.has(w)) common++;
+      const score = common / (qw.size + kw.size - common);
+      if (score > bestScore) { second = bestScore; bestScore = score; best = key; } else if (score > second) second = score;
+    }
+    if (!best || bestScore < 0.8 || bestScore - second < 0.05) return null;
+    if (qNumbers(best) !== qNumbers(f.label) || qNegated(best) !== qNegated(f.label)) return null;
+    // A list the answer is not in is another question.
+    return fitsOptions(f, answers[best]) ? best : null;
+  }
+  const savedAnswer = (f, answers) => { const k = savedKey(f, answers); return k == null ? undefined : answers[k]; };
+
   // ---------- Profile rules ----------
 
   const yn = (v) => {
@@ -347,7 +392,8 @@
     { re: /do you currently work (at|for) |are you (currently )?an? (current )?(employee|team member) (of|at) /, value: () => 'No' },
     { re: /were you referred (to [^?]{0,60})?by |referred by an? .{0,40}(employee|team member|staff)/, value: () => 'No' },
     // "By selecting 'I agree', you agree that X may process my data under its privacy notice."
-    { re: /by selecting .{0,6}i agree|consent to (collect|store|process)|(collect|store|process).{0,30}my (personal )?data.{0,80}privacy/, value: () => 'I agree' },
+    { re: /by selecting .{0,6}i agree|consent to (collect|store|process)|consent for .{0,60}\bto (collect|store|process|use)\b|(collect|store|process).{0,30}my (sensitive |personal )*data.{0,80}(privacy|monitoring|equal opportunit)/,
+      value: (p, f) => (f?.options || []).find((o) => /^(yes|i (agree|consent|accept)|agree|accept)\b/i.test(String(o).trim())) || 'I agree' },
     // "Have you applied to or been referred to X for another role in the past 12 months?" (your saved answer wins).
     { re: /(applied|been referred) (to|for|with) .{0,60}(past|last) \d+ (months?|years?)|referred to .{0,40}for another (role|position)|have you (ever )?(previously )?applied (to|for|with) (this|our|us)\b.{0,40}(before|past|previously)?/, ex: /how many|which|what|when/, value: () => 'No' },
     { re: /relatives?|family members?.{0,30}(work|employ)|related to (anyone|an employee)/, key: 'relatives', value: (p) => yn(p.relatives) },
@@ -396,7 +442,7 @@
     { re: /sponsor/, key: 'requiresSponsorship', value: (p) => yn(p.requiresSponsorship) },
     // "Are you currently based in the United States?" - from the profile's country.
     { re: /\b(based|located|live|living|reside|residing|currently) in (the )?(united states|us|usa|u s)\b/, ex: /sponsor|authori[sz]ed/, value: (p) => (p.country ? (/^(united states( of america)?|usa?|u s a?)$/i.test(norm(p.country)) ? 'Yes' : 'No') : null) },
-    { re: /authori[sz](ed|ation)|legally (eligible|allowed|able|entitled|permitted)|(entitled|permitted) to work|right to work|eligible to work|work permit/, ex: /background|consent|sms|text message/, key: 'workAuthorization', value: (p) => yn(p.workAuthorization) },
+    { re: /authori[sz](ed|ation)|legally (eligible|allowed|able|entitled|permitted)|(able|allowed|eligible|permitted) to legally work|\blegally work\b|(entitled|permitted) to work|right to work|eligible to work|work permit/, ex: /background|consent|sms|text message/, key: 'workAuthorization', value: (p) => yn(p.workAuthorization) },
     { re: /conflicts? of interest/, key: 'conflictOfInterest', value: (p) => yn(p.conflictOfInterest || 'No') },
     // "What is the highest level of US Government security clearance you currently hold?" / "Do you hold
     // an active clearance?": None (a Yes/No list takes "No"; CLEARANCE_ALTS when the list words it otherwise).
@@ -454,10 +500,31 @@
     return RULES.find((r) => YESNO_KEYS.includes(r.key) && fits(norm(field.label) + ' ' + norm(field.desc))(r));
   }
 
+  // The box's own complete list (a <select>, radio buttons, Yes/No buttons), without "Select...".
+  const fixedOptions = (f) => (['select', 'radio', 'choice'].includes(f.kind) || (f.kind === 'dropdown' && f.options?.length)
+    ? (f.options || []).filter((o) => norm(o) && !PLACEHOLDER.test(String(o).trim())) : []);
+  const fitsOptions = (f, v) => { const o = fixedOptions(f); return o.length < 2 || pickWith(o, String(v), altsFor(f)) >= 0; };
+
+  // The first rule for the question whose answer is one of the box's options. A word in a long question
+  // picks the wrong rule ("...sensitive data, such as gender" -> the gender; "Is current position?" -> the
+  // job title; "...work in the region" -> the state): when its answer is not in the list, the next rule
+  // that matches is tried, and with none, the question is left for a saved answer or the AI.
+  function fittingRule(field, p) {
+    const first = ruleFor(field);
+    if (!first || fixedOptions(field).length < 2) return first;
+    const text = norm(field.label) + ' ' + norm(field.hint);
+    const fits = (r) => r.re.test(text) && !(r.ex && r.ex.test(text)) && !r.onlyTextarea;
+    for (const r of [first, ...RULES.filter((r) => r !== first && fits(r))]) {
+      const v = r.value(p, field);
+      if (v == null || v === '' || fitsOptions(field, v)) return r;
+    }
+    return null;
+  }
+
   function ruleValue(field, p) {
     const none = noneOfCountries(field);
     if (none) return none;
-    const r = ruleFor(field);
+    const r = fittingRule(field, p);
     if (!r) return null;
     const v = r.value(p, field);
     return v == null ? null : String(v);
@@ -1449,7 +1516,7 @@
     // takes "I am not a Veteran." The options that start with the "no" come first.
     const startsNo = (t) => /^(no|not|none|i am not|i m not|i do not|i don t|i have not|i haven t|i was not|negative|false)\b/.test(t);
     const polarity = (t) => startsNo(t) || (/\bnot a protected\b/.test(t) && !/identify as (a|one)|^i am a\b/.test(t)) ? 'no'
-      : /^(yes|i am|i m|i have|i do|i identify|i was|true|positive)\b/.test(t) ? 'yes' : '';
+      : /^(yes|i am|i m|i have|i do|i identify|i was|true|positive|i agree|i consent|i accept)\b/.test(t) ? 'yes' : '';
     const pv = polarity(v);
     if (pv) {
       i = ns.findIndex((o) => o === pv || o.split(' ')[0] === pv);
@@ -2642,10 +2709,10 @@
         }
         if (!ctx.settings.overwrite && hasValue(f)) continue;
         // A box without a readable question never takes a saved answer (one saved under "" went everywhere).
-        const saved = usefulLabel(f.label) && answerKey(f.label).length > 3 ? answers[answerKey(f.label)] : undefined;
+        const saved = savedAnswer(f, answers);
         // Yes/No screening questions: the answer you (or the AI) gave this exact question beats the
         // profile's general answer.
-        const rule = ruleFor(f);
+        const rule = fittingRule(f, p);
         let v = saved != null && saved !== '' && (rule ? YESNO_KEYS.includes(rule.key) || !rule.key : !!noneOfCountries(f)) ? saved : ruleValue(f, p);
         if (v == null || v === '') v = saved;
         // "If you answered 'yes' above, please provide..." after a "No": N/A (no AI needed).
@@ -2662,7 +2729,7 @@
         if (ok) {
           filled++;
           // The saved answer was an AI guess nobody checked: purple, and Full auto treats it as an AI answer.
-          const guessed = saved != null && v === saved && aiGuess.has(answerKey(f.label));
+          const guessed = saved != null && v === saved && aiGuess.has(savedKey(f, answers));
           mark(f, guessed ? 'ai' : 'rule');
           if (guessed) aiTouched.set(f.el, { q: cleanQ(f.label || ''), kind: f.kind });
           done.push({ f, v, ms });
@@ -2698,7 +2765,7 @@
 
       const missing = unresolved.filter((f) => f.required && !hasValue(f)).length;
       const pending = unresolved
-        .filter((f) => !hasValue(f) && f.label && (f.required || f.options?.length || f.kind === 'textarea') && !ruleFor(f))
+        .filter((f) => !hasValue(f) && f.label && (f.required || f.options?.length || f.kind === 'textarea') && !fittingRule(f, p))
         .filter((f) => !SENSITIVE.test(norm(f.label + ' ' + f.hint)) && !(f.kind === 'textarea' && JOB_SPECIFIC.test(norm(f.label))))
         .map((f) => ({ q: cleanQ(f.label), options: (f.options || []).slice(0, 40) }))
         .filter((x) => x.q.length > 3 && answers[answerKey(x.q)] === undefined);
@@ -3225,7 +3292,7 @@
   // The answer to this question, saved to the profile's Saved answers (shown with Undo).
   function rememberAnswer(p, f, v) {
     const key = cleanQ(f.label);
-    if (!usefulLabel(key) || answerKey(key).length <= 3) return;
+    if (!usefulLabel(key) || answerKey(key).length <= 3 || isOneTime(f)) return;
     const existing = Object.fromEntries(Object.entries(p.customAnswers || {}).map(([k, a]) => [answerKey(k), a]));
     if (existing[answerKey(key)] === v) return;
     learned[key] = v;
