@@ -110,13 +110,16 @@ for (const file of files) {
     const reports = await page.evaluate(() => window.__jbReports);
     // Problems the filler reported that the form says it must not (e.g. a field the site allows empty).
     const probs = (reports[0]?.problems || []).filter((p) => (expect.noProblems || []).some((q) => p.q.toLowerCase().includes(q.toLowerCase())));
+    // Questions the filler must report (it could not answer them and must say so).
+    const unreported = (expect.mustReport || []).filter((q) => !(reports[0]?.problems || []).some((p) => p.q.toLowerCase().includes(q.toLowerCase())));
     const bad = results.filter((x) => !x.ok);
-    const ok = r.ok && !bad.length && !probs.length && !errors.length;
+    const ok = r.ok && !bad.length && !probs.length && !unreported.length && !errors.length;
     if (!ok) failed++;
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${file}  (${((Date.now() - t0) / 1000).toFixed(1)}s, ${results.length} checks)`);
     if (!r.ok) console.log(`      fill did not finish: ${r.error}`);
     for (const b of bad) console.log(`      ${b.name}: want ${JSON.stringify(b.want)}, got ${JSON.stringify(b.got)}`);
     for (const p of probs) console.log(`      reported as a problem: "${p.q}" (${p.status})`);
+    for (const q of unreported) console.log(`      not reported, but it should be: "${q}"`);
     for (const e of errors) console.log(`      page error: ${e}`);
   } catch (e) {
     failed++;

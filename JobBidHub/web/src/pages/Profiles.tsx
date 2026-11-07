@@ -180,7 +180,8 @@ function Editor({ profile }: { profile: Profile }) {
   }, 'Profile saved');
   const remove = () => confirm(t('Delete {name} and their resume files? Applications stay in the tracker.', { name: profileName(p) })) && run('del', async () => {
     // Privacy: a candidate who leaves can ask for everything to be removed.
-    const erase = confirm(t('Also erase all their history: applications, fill reports and auto-bid queue? OK = erase everything, Cancel = keep the history.'));
+    // Erasing can't be undone, so it needs the word typed (pressing Enter twice only deletes the profile).
+    const erase = (prompt(t('The profile will be deleted. To also erase all their history (applications, fill reports, auto-bid queue), type ERASE. Leave empty to keep the history.')) || '').trim().toUpperCase() === 'ERASE';
     await api(`/profiles/${p.id}${erase ? '?erase=1' : ''}`, { method: 'DELETE' });
     refresh('boot');
     nav('/profiles');

@@ -337,7 +337,13 @@ async function autoCheckKeys() {
   if (!keys.length) return;
   const results = await Promise.all(keys.map(pingKey));
   const at = new Date().toISOString();
-  await updateKeyHealth((h) => keys.forEach((k, i) => (h[k.id] = { ...results[i], model: k.model, at, test: true, auto: true })));
+  await updateKeyHealth((h) => keys.forEach((k, i) => {
+    // The check only lists models, which still works when the quota is used up: it must not mark such a
+    // key "working" again (that would end its rest within 2 minutes). A real AI call or a Test clears it.
+    const prev = h[k.id];
+    if (results[i].ok && prev && !prev.ok && isQuotaError(prev.error) && Date.now() - new Date(prev.at) < QUOTA_COOLDOWN_MS) return;
+    h[k.id] = { ...results[i], model: k.model, at, test: true, auto: true };
+  }));
   await chrome.storage.local.set({ lastKeyCheck: at });
 }
 

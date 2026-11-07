@@ -22,6 +22,7 @@ npm test -- --show        # watch it in a visible window
    - `{ "sel": ".select__single-value", "text": "Yes" }`: what a custom dropdown shows
    - `{ ..., "contains": "555" }`: the value only has to contain this
    - `"noProblems": ["Location (City)"]`: these questions must not be reported to the hub as problems
+   - `"mustReport": ["Location (City)"]`: these questions must be reported (the filler could not answer them)
 4. Run `npm test`. The new form should fail before your fix and pass after it.
 
 `profile.json` is made-up test data. Never put a real candidate's details in this folder (it goes into git).

@@ -932,6 +932,7 @@ const ROWS: [string, string, string][] = [
   ['An AI key needs attention', 'AI 키를 확인해야 합니다', '有一个 AI 密钥需要处理'],
   ['AI key', 'AI 키', 'AI 密钥'],
   ['Free quota used up - JobBid uses the other keys until it resets', '무료 할당량 소진 - 초기화될 때까지 다른 키를 사용합니다', '免费额度已用完 - 在重置前 JobBid 会使用其他密钥'],
+  ['The profile will be deleted. To also erase all their history (applications, fill reports, auto-bid queue), type ERASE. Leave empty to keep the history.', '프로필이 삭제됩니다. 기록(지원 내역, 작성 보고서, 자동 지원 대기열)까지 모두 지우려면 ERASE를 입력하세요. 비워 두면 기록은 남습니다.', '将删除该档案。如需同时删除其全部记录（申请、填写报告、自动投递队列），请输入 ERASE。留空则保留记录。'],
 ];
 
 export const DICT: Record<Exclude<Lang, 'en'>, Record<string, string>> = { ko: {}, zh: {} };

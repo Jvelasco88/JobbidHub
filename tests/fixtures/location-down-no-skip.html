@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Job Application (location service down, no permission to skip)</title></head><body>
+<!-- Like greenhouse-location-down, but the site does NOT say the application can be sent without it:
+     the required box stays a problem that needs the user (Full auto must not submit). -->
+<form onsubmit="return false">
+  <div class="text-input-wrapper"><label for="first_name">First Name<span aria-hidden="true">*</span></label><input id="first_name" aria-required="true" type="text"></div>
+  <div class="select" data-id="candidate-location" data-label="Location (City)" data-search="city" data-required></div>
+</form>
+<script src="react-select.js"></script>
+<script>
+  // The "server" fails: lock the box the way Greenhouse did.
+  const root = document.querySelector('[data-id=candidate-location]');
+  const input = root.querySelector('input.select__input');
+  input.addEventListener('input', () => setTimeout(() => {
+    if (input.disabled) return;
+    input.disabled = true;
+    input.setAttribute('aria-invalid', 'true');
+    input.setAttribute('aria-errormessage', 'candidate-location-error');
+    root.querySelector('.select__control').classList.add('select__control--is-disabled', 'select__control--error');
+    root.querySelector('.select__control').setAttribute('aria-disabled', 'true');
+    root.querySelector('.select-shell').classList.add('select--is-disabled');
+    const menu = document.createElement('div');
+    menu.className = 'select__menu stuck';
+    menu.innerHTML = '<div class="select__menu-list" role="listbox"><div class="select__option" role="option">Chicago, Illinois, United States</div><div class="select__option" role="option">North Chicago, Illinois, United States</div></div>';
+    root.querySelector('.select-shell').append(menu);
+    const p = document.createElement('p');
+    p.id = 'candidate-location-error';
+    p.className = 'helper-text helper-text--error';
+    p.textContent = 'Our location service is temporarily unavailable.';
+    root.append(p);
+  }, 200), { once: true });
+</script>
+<script type="application/json" id="expect">{
+  "checks": [
+    { "name": "First Name", "sel": "#first_name", "value": "Alex" }
+  ],
+  "mustReport": ["Location (City)"]
+}</script>
+</body></html>

@@ -150,6 +150,7 @@ export async function aiRequest({ provider, apiKey, model, baseUrl }, prompt, { 
 }
 
 const DEAD_COOLDOWN_MS = 10 * 60 * 1000;
+const QUOTA_COOLDOWN_MS = 6 * 60 * 60 * 1000; // a used-up free quota stays used up for hours
 let rotateIndex = 0;
 
 export async function ai(prompt, { json = true, temperature = 0.4, timeoutMs = 90000 } = {}) {
@@ -161,7 +162,7 @@ export async function ai(prompt, { json = true, temperature = 0.4, timeoutMs = 9
     keys = [...keys.slice(start), ...keys.slice(0, start)];
   }
   const health = keyHealth();
-  const dead = (k) => health[k.id] && !health[k.id].ok && Date.now() - new Date(health[k.id].at) < DEAD_COOLDOWN_MS;
+  const dead = (k) => { const h = health[k.id]; return !!h && !h.ok && Date.now() - new Date(h.at) < (/quota/i.test(h.error || '') ? QUOTA_COOLDOWN_MS : DEAD_COOLDOWN_MS); };
   keys = [...keys.filter((k) => !dead(k)), ...keys.filter(dead)];
   const deadline = Date.now() + timeoutMs;
   const errors = [];

@@ -2435,7 +2435,9 @@
   // The site gave up on this box itself and locked it ("Our location service is temporarily unavailable.
   // You can submit your application without a location."): it may stay empty. Its list, stuck open
   // because the box is locked, is hidden. Returns the site's message ('' when not).
-  const SITE_SKIP = /temporarily unavailable|(submit|apply|continue)( (your|the) application)? without/i;
+  // Only when the site says it may be left out: "unavailable" alone keeps it a required box that needs you
+  // (otherwise Full auto could submit an incomplete application).
+  const SITE_SKIP = /(submit|apply|continue)( (your|the) application)? without/i;
   function siteGaveUp(f) {
     const el = f.el;
     if (!el || !(el.disabled || el.closest?.('[aria-disabled="true"], [class*="is-disabled" i]'))) return '';
