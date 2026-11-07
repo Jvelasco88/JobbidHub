@@ -22,7 +22,9 @@ const STEPS = [
 ];
 function draw(error = '') {
   const st = STEPS[state.step];
-  app.innerHTML = `<h2 data-automation-id="pageHeaderTitle">${st.title}</h2>${error ? `<div role="alert" class="error">${error}</div>` : ''}<form onsubmit="return false">${st.html()}</form>
+  // Workday's step bar: data-automation-id="progressBar…" (once mistaken for an upload still running).
+  const bar = `<ol data-automation-id="progressBar">${STEPS.map((x, i) => `<li data-automation-id="${i === state.step ? 'progressBarActiveStep' : 'progressBarInactiveStep'}">${i === state.step ? '<span>current step</span>' : ''}${x.title}</li>`).join('')}</ol>`;
+  app.innerHTML = `${bar}<h2 data-automation-id="pageHeaderTitle">${st.title}</h2>${state.step === 0 ? '<h3 style="color:#b45309">Note, under the My Experience tab only your most recent position is required.</h3>' : ''}${error ? `<div role="alert" class="error">${error}</div>` : ''}<form onsubmit="return false">${st.html()}</form>
     <div><button type="button" data-automation-id="bottom-navigation-next-button">${st.button}</button></div>`;
   const file = app.querySelector('input[type=file]');
   if (file) file.addEventListener('change', () => {

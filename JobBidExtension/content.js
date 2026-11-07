@@ -3400,7 +3400,12 @@
   // What is on screen: the step's headings and its questions. Changes when the next step opens.
   const stepSig = () => [...document.querySelectorAll('h1, h2, h3, [data-automation-id="pageHeaderTitle"]')].filter(isVisible).map(textOf).join('|').slice(0, 300)
     + '#' + formFields().map((f) => f.label).join('|').slice(0, 600);
-  const stepName = () => textOf([...document.querySelectorAll('h2, h1, h3')].filter((h) => isVisible(h) && !h.closest('#jobbid-root, #jobbid-root-panel')).pop()).slice(0, 60);
+  const stepName = () => {
+    const active = document.querySelector('[data-automation-id="progressBarActiveStep"], [aria-current="step"]');
+    if (active && isVisible(active)) return textOf(active).replace(/^(current step|step \d+ of \d+)\s*/i, '').slice(0, 60);
+    const hs = [...document.querySelectorAll('[data-automation-id="pageHeaderTitle"], h2, h1')].filter((h) => isVisible(h) && !h.closest('#jobbid-root, #jobbid-root-panel') && textOf(h).length < 70);
+    return textOf(hs.find((h) => h.matches('[data-automation-id="pageHeaderTitle"]')) || hs[hs.length - 1]).slice(0, 60);
+  };
   // A step page also counts as the form: Workday's first step is only a resume drop box and Continue.
   const isStepPage = (f) => isForm(f) || (f.length >= 1 && !!findNextButton());
   async function waitForStep(ms) {
@@ -3413,7 +3418,9 @@
     return null;
   }
   // An upload still running (the site reads the resume): Continue would not move on yet.
-  const uploading = () => deepQueryAll('[role=progressbar], [data-automation-id*="progress" i], [class*="uploading" i], [class*="spinner" i]').some(isVisible);
+  const uploading = () => deepQueryAll('[role=progressbar], [data-automation-id*="upload" i][data-automation-id*="progress" i], [class*="uploading" i]')
+    .some((e) => isVisible(e) && !e.closest('[data-automation-id^="progressBar"], [role=list], ol, nav') && textOf(e).length < 60 && e.getAttribute('aria-valuenow') !== '100')
+    || deepQueryAll('[data-automation-id*="file-upload" i] *, [class*="upload" i] *').some((e) => isVisible(e) && /^(uploading|processing|parsing)\b/i.test(textOf(e)) && textOf(e).length < 40);
 
   // Each step, for the status line under "Auto-apply this job" in the side panel.
   const bidStatus = (text, note = '', kind = 'run') => { try { window.__jobbidBidStatus?.({ text, note, kind }); } catch { /* no panel */ } };
@@ -3445,12 +3452,16 @@
       const where = stepName();
       const at = steps > 1 || findNextButton() ? `Step ${steps}${where ? `: ${where}` : ''}` : `As ${p.label || p.fullName}`;
       bidStatus('Filling the form', at);
-      // Fill twice: some questions appear only after earlier answers.
+      // A second pass only when the first one brought new questions (they appear after earlier answers).
+      const labels = () => formFields().map((f) => f.label).join('|');
+      const before = labels();
       await fill({ noApply: true, noAutoSubmit: true });
-      await sleep(1500);
-      bidStatus('Filling the form', `${at} - second pass`);
-      await fill({ noApply: true, noAutoSubmit: true });
-      await sleep(1000);
+      await sleep(500);
+      if (labels() !== before) {
+        bidStatus('Filling the form', `${at} - new questions appeared`);
+        await fill({ noApply: true, noAutoSubmit: true });
+        await sleep(400);
+      }
 
       let missing = requiredMissing();
       const askable = missing.filter((f) => f.kind !== 'file');
@@ -3471,17 +3482,18 @@
       const next = findNextButton();
       if (!next || steps >= 12) break;
       // The resume is still being read by the site: Continue would not move on yet.
-      for (let t = 0; t < 30 && uploading(); t++) await sleep(500);
+      for (let t = 0; t < 20 && uploading(); t++) { if (!t) bidStatus('Waiting for the upload', 'The site is reading the resume'); await sleep(500); }
       bidStatus('Next step', `Pressing "${btnLabel(next)}"`);
       const sig = stepSig();
       next.click();
       let moved = false;
-      for (let t = 0; t < 40 && !moved; t++) { await sleep(500); moved = stepSig() !== sig; }
+      for (let t = 0; t < 60 && !moved; t++) { await sleep(250); moved = stepSig() !== sig; }
       if (!moved) {
         const errs = pageErrors();
         return { status: 'needs', reason: `${at} was not accepted: ${errs.slice(0, 3).join(' · ') || 'the page did not move on after Continue'}`.slice(0, 480) };
       }
-      await sleep(1500); // the new step finishes drawing
+      // The new step finishes drawing: the same questions twice in a row (at most 3 s).
+      for (let t = 0, last = ''; t < 12; t++) { await sleep(250); const now = stepSig(); if (now === last) break; last = now; }
       if (visiblePassword()) return { status: 'needs', reason: 'This site asks you to sign in or create an account.' };
     }
 
