@@ -10,7 +10,7 @@ import path from 'node:path';
 import { nowIso, normalizeUrl, siteOf } from './util.js';
 
 // Never stored in the hub: per-Chrome state (same list as the extension's DS_LOCAL_ONLY).
-export const LOCAL_ONLY = ['syncState', 'hubConfig', 'hubState', 'lastBlockKey', 'panelCollapsed', 'panelWidth', 'panelPos', 'tabTop', 'panelTab', 'keyHealth', 'aiStatus', 'jobCache', 'ipInfo', 'lastKeyCheck', 'extUpdate', 'proxyCfg', 'proxyState'];
+export const LOCAL_ONLY = ['syncState', 'hubConfig', 'hubState', 'lastBlockKey', 'panelCollapsed', 'panelWidth', 'panelPos', 'tabTop', 'panelTab', 'keyHealth', 'aiStatus', 'jobCache', 'ipInfo', 'lastKeyCheck', 'extUpdate', 'proxyCfg', 'proxyState', 'keyUsage'];
 
 let db;
 let dir = '';

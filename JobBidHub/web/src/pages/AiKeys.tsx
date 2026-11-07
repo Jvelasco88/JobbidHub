@@ -60,6 +60,9 @@ export default function AiKeys() {
   const settings = boot?.settings || {};
   const keys: Key[] = Array.isArray(settings.aiKeys) ? settings.aiKeys : [];
   const h = health.data?.health || {};
+  // Calls per key from every Chrome and the hub (today / last 7 days).
+  const usage = useQuery({ queryKey: ['aiusage'], queryFn: () => api<{ keys: Record<string, Usage> }>('/admin/ai-usage?days=7'), refetchInterval: 60000 });
+  const u = usage.data?.keys || {};
 
   const saveKeys = (aiKeys: Key[], ok?: string) => run('save', async () => { await api('/settings', { method: 'PUT', body: { settings: { aiKeys } } }); refresh('boot', 'aihealth'); }, ok);
   const move = (i: number, d: number) => { const n = [...keys]; [n[i], n[i + d]] = [n[i + d], n[i]]; saveKeys(n); };
@@ -101,6 +104,7 @@ export default function AiKeys() {
                     <span className="font-mono text-[12px] text-muted">{mask(k.key)}</span>
                   </div>
                   <div className="truncate text-[12px] text-muted">{k.model || boot?.providers?.[k.provider]?.defaultModel}</div>
+                  <UsageLine u={u[k.id]} />
                 </div>
                 {st ? (
                   st.ok
@@ -123,6 +127,20 @@ export default function AiKeys() {
       )}
       <KeyDialog open={adding} onClose={() => setAdding(false)} onSave={(k) => { saveKeys([...keys, k], 'Key added'); setAdding(false); }} />
       <KeyDialog open={!!editing} editing={editing} onClose={() => setEditing(null)} onSave={(k) => { saveKeys(keys.map((x) => (x.id === k.id ? k : x)), 'Saved'); setEditing(null); }} />
+    </div>
+  );
+}
+
+type Usage = { today: { calls: number; ok: number; fail: number; quota: number }; week: { calls: number; ok: number; fail: number; quota: number; ms: number }; lastError: string; lastErrorAt: string };
+function UsageLine({ u }: { u?: Usage }) {
+  const { t } = usePrefs();
+  if (!u || !u.week.calls) return <div className="text-[12px] text-muted">{t('Not used in the last 7 days')}</div>;
+  const avg = u.week.ok ? (u.week.ms / u.week.calls / 1000).toFixed(1) : '';
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 text-[12px] text-ink2">
+      <span>{t('Today: {n} calls', { n: u.today.calls })}{u.today.fail ? <span className="text-bad"> · {t('{n} failed', { n: u.today.fail })}</span> : null}</span>
+      <span className="text-muted">{t('7 days: {n} calls', { n: u.week.calls })}{avg ? ` · ${t('avg {s}s', { s: avg })}` : ''}</span>
+      {u.today.quota > 0 && <Badge tone="warn">{t('Quota used up today')}</Badge>}
     </div>
   );
 }

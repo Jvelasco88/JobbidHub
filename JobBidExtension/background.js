@@ -180,6 +180,9 @@ function lastJsonIn(text, question, accept) {
 
 let rotateIndex = 0;
 const DEAD_COOLDOWN_MS = 10 * 60 * 1000;
+// A key whose free quota is used up stays used up for hours (Gemini resets daily): don't retry it every 10 minutes.
+const QUOTA_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const isQuotaError = (msg) => /quota/i.test(String(msg || ''));
 
 // Keys to try for one request: live/unchecked keys first, recently dead ones last.
 async function keysToTry(settings) {
@@ -189,7 +192,10 @@ async function keysToTry(settings) {
     const start = rotateIndex++ % keys.length;
     keys = [...keys.slice(start), ...keys.slice(0, start)];
   }
-  const recentlyDead = (k) => keyHealth[k.id] && !keyHealth[k.id].ok && Date.now() - new Date(keyHealth[k.id].at) < DEAD_COOLDOWN_MS;
+  const recentlyDead = (k) => {
+    const h = keyHealth[k.id];
+    return !!h && !h.ok && Date.now() - new Date(h.at) < (isQuotaError(h.error) ? QUOTA_COOLDOWN_MS : DEAD_COOLDOWN_MS);
+  };
   return [...keys.filter((k) => !recentlyDead(k)), ...keys.filter(recentlyDead)];
 }
 
@@ -214,6 +220,7 @@ async function ai(question, { json = true, temperature = 0.4, timeoutMs = 0, con
       aiStage(`Asking ${k.provider} · ${k.model || ''}...`);
       const out = await aiRequest({ provider: k.provider, apiKey: k.key, model: k.model, baseUrl: k.baseUrl }, prompt, { json, temperature, signal: ctrl.signal });
       recordKeyHealth(k, { ok: true, ms: Date.now() - started });
+      countKeyUse(k, { ok: true, ms: Date.now() - started });
       return out;
     } catch (e) {
       if (e.name === 'AbortError') {
@@ -223,6 +230,7 @@ async function ai(question, { json = true, temperature = 0.4, timeoutMs = 0, con
       }
       // A connection/HTTP failure marks the key dead; a bad answer from a working key doesn't.
       if (!e.badOutput) recordKeyHealth(k, { ok: false, error: e.message });
+      countKeyUse(k, { ok: !!e.badOutput, error: e.badOutput ? '' : e.message, ms: Date.now() - started });
       errors.push(`${k.provider}: ${e.message}`);
     } finally {
       clearTimeout(timer);
@@ -249,6 +257,43 @@ function updateKeyHealth(fn) {
 function recordKeyHealth(k, result) {
   const at = new Date().toISOString();
   return updateKeyHealth((h) => (h[k.id] = { ...result, model: k.model, at }));
+}
+
+// Calls per key since the last report to the hub (its AI keys page shows each key's use and alerts the
+// admins when one runs out of quota). Uses the same queue as keyHealth so counts are never lost.
+function countKeyUse(k, { ok, error = '', ms = 0 }) {
+  healthQueue = healthQueue.then(async () => {
+    const { keyUsage = {} } = await chrome.storage.local.get('keyUsage');
+    const u = (keyUsage[k.id] ||= { keyId: k.id, provider: k.provider, model: k.model || '', calls: 0, ok: 0, fail: 0, quota: 0, ms: 0, lastError: '' });
+    u.calls++; u.ms += Math.round(ms); u.model = k.model || u.model;
+    if (ok) u.ok++; else { u.fail++; u.lastError = String(error).slice(0, 300); if (isQuotaError(error)) u.quota++; }
+    await chrome.storage.local.set({ keyUsage });
+  }).catch(() => {});
+}
+
+async function flushKeyUsage() {
+  const cfg = await hubConfig();
+  if (!cfg.on || !cfg.token || cfg.offline) return;
+  let items = [];
+  healthQueue = healthQueue.then(async () => {
+    const { keyUsage = {} } = await chrome.storage.local.get('keyUsage');
+    items = Object.values(keyUsage);
+    if (items.length) await chrome.storage.local.set({ keyUsage: {} });
+  }).catch(() => {});
+  await healthQueue;
+  if (!items.length) return;
+  try { await hubApi('POST', '/api/ai-usage', { items }); } catch {
+    // Hub away: put the counts back for the next try.
+    healthQueue = healthQueue.then(async () => {
+      const { keyUsage = {} } = await chrome.storage.local.get('keyUsage');
+      for (const it of items) {
+        const u = keyUsage[it.keyId];
+        if (!u) keyUsage[it.keyId] = it;
+        else for (const f of ['calls', 'ok', 'fail', 'quota', 'ms']) u[f] += it[f] || 0;
+      }
+      await chrome.storage.local.set({ keyUsage });
+    }).catch(() => {});
+  }
 }
 
 // ---------- Automatic key check (every 2 minutes) ----------
@@ -1644,7 +1689,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === 'datasync') dsSync({ quiet: true }).catch(() => {}); // pick up changes saved by another Chrome
   if (a.name === 'extupdate') extUpdateCheck().catch(() => {});
   if (a.name === 'autobid') bidTick().catch(() => {}); // the hub's auto-bid queue
-  if (a.name === 'hubsync') { hubAdoptFromOpenTabs().catch(() => {}).finally(() => hubSync().catch(() => {})); proxyRefresh().catch(() => {}); } // pick up changes made in the hub dashboard (and the proxy setting)
+  if (a.name === 'hubsync') { hubAdoptFromOpenTabs().catch(() => {}).finally(() => hubSync().catch(() => {})); proxyRefresh().catch(() => {}); flushKeyUsage().catch(() => {}); } // pick up changes made in the hub dashboard (and the proxy setting)
 });
 
 // Save local changes to the data file a few seconds after they happen.

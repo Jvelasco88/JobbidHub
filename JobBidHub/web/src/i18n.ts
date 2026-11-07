@@ -923,6 +923,15 @@ const ROWS: [string, string, string][] = [
   ['The hub can be opened from the internet, so use at least 10 characters that are not the default password.', '허브는 인터넷에서 열 수 있으므로 기본 비밀번호가 아닌 10자 이상을 사용하세요.', '中心可以从互联网打开，请使用至少 10 个字符且不是默认密码的密码。'],
   ['At least 8 characters (10 or more is better). Your other devices will be signed out.', '8자 이상(10자 이상 권장). 다른 기기에서는 로그아웃됩니다.', '至少 8 个字符（建议 10 个以上）。你的其他设备将被登出。'],
   ['Also erase all their history: applications, fill reports and auto-bid queue? OK = erase everything, Cancel = keep the history.', '기록도 모두 지울까요: 지원 내역, 작성 보고서, 자동 지원 대기열? 확인 = 모두 지우기, 취소 = 기록 유지.', '同时删除其全部记录：申请、填写报告和自动投递队列？确定 = 全部删除，取消 = 保留记录。'],
+  ['Not used in the last 7 days', '최근 7일 동안 사용 안 함', '最近 7 天未使用'],
+  ['Today: {n} calls', '오늘: {n}회 호출', '今天：{n} 次调用'],
+  ['{n} failed', '{n}회 실패', '{n} 次失败'],
+  ['7 days: {n} calls', '7일: {n}회 호출', '7 天：{n} 次调用'],
+  ['avg {s}s', '평균 {s}초', '平均 {s} 秒'],
+  ['Quota used up today', '오늘 할당량 소진', '今日额度已用完'],
+  ['An AI key needs attention', 'AI 키를 확인해야 합니다', '有一个 AI 密钥需要处理'],
+  ['AI key', 'AI 키', 'AI 密钥'],
+  ['Free quota used up - JobBid uses the other keys until it resets', '무료 할당량 소진 - 초기화될 때까지 다른 키를 사용합니다', '免费额度已用完 - 在重置前 JobBid 会使用其他密钥'],
 ];
 
 export const DICT: Record<Exclude<Lang, 'en'>, Record<string, string>> = { ko: {}, zh: {} };

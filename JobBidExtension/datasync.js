@@ -4,7 +4,7 @@
 
 const DS_FILE_KEY = 'dataFileHandle';
 // Per-Chrome state that never goes into the shared file.
-const DS_LOCAL_ONLY = ['syncState', 'hubConfig', 'hubState', 'lastBlockKey', 'panelCollapsed', 'panelWidth', 'panelPos', 'tabTop', 'panelTab', 'keyHealth', 'aiStatus', 'jobCache', 'ipInfo', 'lastKeyCheck', 'extUpdate', 'proxyCfg', 'proxyState'];
+const DS_LOCAL_ONLY = ['syncState', 'hubConfig', 'hubState', 'lastBlockKey', 'panelCollapsed', 'panelWidth', 'panelPos', 'tabTop', 'panelTab', 'keyHealth', 'aiStatus', 'jobCache', 'ipInfo', 'lastKeyCheck', 'extUpdate', 'proxyCfg', 'proxyState', 'keyUsage'];
 
 function dsIdb() {
   return new Promise((resolve, reject) => {

@@ -13,6 +13,7 @@ import jobLinkRoutes from './joblinks.js';
 import fillReportRoutes from './fillreports.js';
 import proxyRoutes from './proxy.js';
 import backupRoutes, { startBackups } from './backup.js';
+import aiUsageRoutes from './aiusage.js';
 import extensionRoutes from './extension.js';
 import authRoutes from './auth-routes.js';
 import { initAuth } from './auth.js';
@@ -78,6 +79,7 @@ await app.register(jobLinkRoutes);
 await app.register(fillReportRoutes);
 await app.register(proxyRoutes);
 await app.register(backupRoutes);
+await app.register(aiUsageRoutes);
 await app.register(extensionRoutes);
 
 // The dashboard (built with "npm run build" in web/). Unknown non-API paths return index.html (client-side routing).

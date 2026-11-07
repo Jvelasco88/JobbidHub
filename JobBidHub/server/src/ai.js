@@ -2,6 +2,7 @@
 // failover: try live keys first, skip keys that failed in the last 10 minutes, move on when one fails.
 import { getStore, getMeta, setMeta } from './db.js';
 import { aiFetch } from './proxy.js';
+import { recordUsage } from './aiusage.js';
 
 // Gemini and Anthropic (Claude) have their own formats; every other provider speaks the OpenAI
 // chat-completions format. "custom" is any OpenAI-compatible server: its address is saved on the key.
@@ -40,6 +41,9 @@ function recordHealth(k, result) {
   const h = keyHealth();
   h[k.id] = { ...result, model: k.model, at: new Date().toISOString() };
   setMeta('keyHealth', JSON.stringify(h));
+  // The hub's own AI calls count in the key's usage too.
+  const quota = !result.ok && /quota/i.test(result.error || '');
+  try { recordUsage('hub', [{ keyId: k.id, provider: k.provider, model: k.model, calls: 1, ok: result.ok ? 1 : 0, fail: result.ok ? 0 : 1, quota: quota ? 1 : 0, ms: result.ms || 0, lastError: result.error || '' }]); } catch { /* counting never breaks a request */ }
 }
 
 export function friendlyError(status, body, provider) {
