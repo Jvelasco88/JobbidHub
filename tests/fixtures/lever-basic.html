@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Senior ML Engineer - Example Co (Lever style)</title></head><body>
+<h2>Submit your application</h2>
+<form class="application-form" onsubmit="return false">
+  <ul>
+    <li class="application-question"><label><div class="application-label">Full name<span class="required">✱</span></div><div class="application-field"><input type="text" name="name" required></div></label></li>
+    <li class="application-question"><label><div class="application-label">Email<span class="required">✱</span></div><div class="application-field"><input type="email" name="email" required></div></label></li>
+    <li class="application-question"><label><div class="application-label">Phone</div><div class="application-field"><input type="text" name="phone"></div></label></li>
+    <li class="application-question"><label><div class="application-label">Current company</div><div class="application-field"><input type="text" name="org"></div></label></li>
+    <li class="application-question"><label><div class="application-label">LinkedIn URL</div><div class="application-field"><input type="text" name="urls[LinkedIn]"></div></label></li>
+    <li class="application-question"><label><div class="application-label">GitHub URL</div><div class="application-field"><input type="text" name="urls[GitHub]"></div></label></li>
+  </ul>
+  <button type="submit">Submit application</button>
+</form>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "Full name", "sel": "input[name=name]", "value": "Alex Rivera" },
+  { "name": "Email", "sel": "input[name=email]", "value": "alex.rivera@example.com" },
+  { "name": "Phone", "sel": "input[name=phone]", "contains": "555" },
+  { "name": "Current company", "sel": "input[name=org]", "value": "Example Analytics" },
+  { "name": "LinkedIn", "sel": "input[name='urls[LinkedIn]']", "contains": "linkedin.com/in/alex-rivera" },
+  { "name": "GitHub", "sel": "input[name='urls[GitHub]']", "contains": "github.com/alex-rivera" }
+] }</script>
+</body></html>

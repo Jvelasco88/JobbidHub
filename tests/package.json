@@ -1,0 +1,12 @@
+{
+  "name": "jobbid-tests",
+  "private": true,
+  "type": "module",
+  "description": "Runs the extension's real content.js on saved application forms in headless Chrome and checks what got filled.",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "24.10.0"
+  }
+}

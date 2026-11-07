@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Job Application for Senior Machine Learning Engineer at Example (Greenhouse)</title></head><body>
+<form id="application-form" onsubmit="return false">
+  <div class="text-input-wrapper"><label for="first_name" id="first_name-label">First Name<span aria-hidden="true">*</span></label><input id="first_name" aria-required="true" type="text"></div>
+  <div class="text-input-wrapper"><label for="last_name" id="last_name-label">Last Name<span aria-hidden="true">*</span></label><input id="last_name" aria-required="true" type="text"></div>
+  <div class="text-input-wrapper"><label for="email" id="email-label">Email<span aria-hidden="true">*</span></label><input id="email" aria-required="true" type="text"></div>
+  <div class="select" data-id="candidate-location" data-label="Location (City)" data-search="city" data-required></div>
+  <div class="select" data-id="q_auth" data-label="Are you legally authorized to work in the country in which this job is located?" data-options="Yes|No" data-required></div>
+  <div class="select" data-id="q_spon" data-label="Will you now or in the future require visa sponsorship?" data-options="Yes|No" data-required></div>
+  <div class="select" data-id="degree--0" data-label="Degree" data-options="High School|Associate's Degree|Bachelor's Degree|Master's Degree|Doctor of Philosophy (Ph.D.)" data-required></div>
+  <div class="select" data-id="discipline--0" data-label="Discipline" data-options="Biology|Computer Engineering|Computer Science|Economics|Mathematics" data-required></div>
+</form>
+<script src="react-select.js"></script>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "First Name", "sel": "#first_name", "value": "Alex" },
+  { "name": "Email", "sel": "#email", "value": "alex.rivera@example.com" },
+  { "name": "Location (city search)", "sel": "[data-id=candidate-location] .select__single-value", "text": "Chicago, Illinois, United States" },
+  { "name": "Work authorization", "sel": "[data-id=q_auth] .select__single-value", "text": "Yes" },
+  { "name": "Sponsorship", "sel": "[data-id=q_spon] .select__single-value", "text": "No" },
+  { "name": "Degree", "sel": "[data-id='degree--0'] .select__single-value", "text": "Bachelor's Degree" },
+  { "name": "Discipline", "sel": "[data-id='discipline--0'] .select__single-value", "text": "Computer Science" }
+] }</script>
+</body></html>

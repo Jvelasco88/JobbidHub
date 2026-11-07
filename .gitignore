@@ -5,6 +5,7 @@
 !/JobBidExtension/
 !/JobBidHub/
 !/store/
+!/tests/
 
 # Hub data: database, encryption key, settings (backed up separately, never in git)
 /JobBidHub/data/
