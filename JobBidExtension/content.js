@@ -3384,17 +3384,48 @@
     .map((e) => (e.getAttribute('aria-invalid') === 'true' ? labelFor(e) + ' is invalid' : textOf(e)))
     .filter((t) => t && t.length < 160);
 
+  // Multi-page applications (Workday, Oracle, SuccessFactors, iCIMS...): each step is filled, then its
+  // Continue / Next button is pressed, until the page with the final Submit.
+  const NEXT_RE = /^(continue|next|next step|save (and|&) continue|save (and|&) next|continue to next step|proceed|review|review application)$/i;
+  const btnLabel = (b) => (b.innerText || b.value || b.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+  function findNextButton() {
+    // Workday's footer button (it says "Continue", "Save and Continue", and "Submit" on the last step).
+    const wd = document.querySelector('[data-automation-id="bottom-navigation-next-button"], [data-automation-id="pageFooterNextButton"]');
+    if (wd && isVisible(wd) && !wd.disabled && NEXT_RE.test(btnLabel(wd))) return wd;
+    return deepQueryAll('button, input[type=submit], input[type=button], [role=button]')
+      .filter((b) => isVisible(b) && !b.disabled && b.getAttribute('aria-disabled') !== 'true' && !b.closest('#jobbid-root, #jobbid-root-panel'))
+      .reverse() // the page's own footer buttons come last
+      .find((b) => NEXT_RE.test(btnLabel(b))) || null;
+  }
+  // What is on screen: the step's headings and its questions. Changes when the next step opens.
+  const stepSig = () => [...document.querySelectorAll('h1, h2, h3, [data-automation-id="pageHeaderTitle"]')].filter(isVisible).map(textOf).join('|').slice(0, 300)
+    + '#' + formFields().map((f) => f.label).join('|').slice(0, 600);
+  const stepName = () => textOf([...document.querySelectorAll('h2, h1, h3')].filter((h) => isVisible(h) && !h.closest('#jobbid-root, #jobbid-root-panel')).pop()).slice(0, 60);
+  // A step page also counts as the form: Workday's first step is only a resume drop box and Continue.
+  const isStepPage = (f) => isForm(f) || (f.length >= 1 && !!findNextButton());
+  async function waitForStep(ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      const f = formFields();
+      if (isStepPage(f)) return f;
+      await sleep(700);
+    }
+    return null;
+  }
+  // An upload still running (the site reads the resume): Continue would not move on yet.
+  const uploading = () => deepQueryAll('[role=progressbar], [data-automation-id*="progress" i], [class*="uploading" i], [class*="spinner" i]').some(isVisible);
+
   // Each step, for the status line under "Auto-apply this job" in the side panel.
   const bidStatus = (text, note = '', kind = 'run') => { try { window.__jobbidBidStatus?.({ text, note, kind }); } catch { /* no panel */ } };
 
   async function runBid(mode) {
     bidStatus('Looking for the application form');
-    let fields = await waitForForm(needsApplyClick() ? 3000 : 15000);
+    let fields = await waitForStep(needsApplyClick() ? 3000 : 15000);
     if (!fields && needsApplyClick()) {
       bidStatus('Pressing Apply', 'Opening the application form');
       const r = await openApplication();
       if (r === 'away') return new Promise(() => {}); // the next page carries on and reports
-      fields = r === 'form' ? formFields() : await waitForForm(5000);
+      fields = r === 'form' ? formFields() : await waitForStep(5000);
     }
     if (visiblePassword()) return { status: 'needs', reason: 'This site asks you to sign in or create an account.' };
     if (!fields) {
@@ -3406,31 +3437,57 @@
     if (!ctx.ok || !p) return { status: 'failed', reason: ctx.error || 'No profile' };
 
     aiTouched.clear();
-    bidStatus('Filling the form', `As ${p.label || p.fullName}`);
-    // Fill twice: some questions appear only after earlier answers.
-    await fill({ noApply: true, noAutoSubmit: true });
-    await sleep(1500);
-    bidStatus('Filling the form', 'Second pass: questions that appeared after the first answers');
-    await fill({ noApply: true, noAutoSubmit: true });
-    await sleep(1000);
-
-    let missing = requiredMissing();
-    const askable = missing.filter((f) => f.kind !== 'file');
-    if (askable.length) {
-      bidStatus(`Asking the AI (${askable.length} question${askable.length === 1 ? '' : 's'})`, askable.slice(0, 3).map((f) => cleanQ(f.label || f.hint)).filter(Boolean).join(' · '));
-      const r = await aiAnswerNow(askable);
-      if (r && r.ok === false && r.error) toast({ kind: 'warn', title: 'Auto bid: AI problem', msg: r.error, ms: 8000 });
+    // AI guesses on every step: earlier steps leave the page, but their answers are still in the application.
+    const guessedAll = new Set();
+    let steps = 0;
+    for (;;) {
+      steps++;
+      const where = stepName();
+      const at = steps > 1 || findNextButton() ? `Step ${steps}${where ? `: ${where}` : ''}` : `As ${p.label || p.fullName}`;
+      bidStatus('Filling the form', at);
+      // Fill twice: some questions appear only after earlier answers.
+      await fill({ noApply: true, noAutoSubmit: true });
+      await sleep(1500);
+      bidStatus('Filling the form', `${at} - second pass`);
+      await fill({ noApply: true, noAutoSubmit: true });
       await sleep(1000);
-    }
-    missing = requiredMissing();
-    if (missing.length) {
-      const names = missing.map((f) => cleanQ(f.label || f.hint) || f.kind).slice(0, 5);
-      return { status: 'needs', reason: `${missing.length} required question${missing.length === 1 ? '' : 's'} not answered: ${names.join(' · ')}`.slice(0, 480), detail: { questions: names } };
+
+      let missing = requiredMissing();
+      const askable = missing.filter((f) => f.kind !== 'file');
+      if (askable.length) {
+        bidStatus(`Asking the AI (${askable.length} question${askable.length === 1 ? '' : 's'})`, askable.slice(0, 3).map((f) => cleanQ(f.label || f.hint)).filter(Boolean).join(' · '));
+        const r = await aiAnswerNow(askable);
+        if (r && r.ok === false && r.error) toast({ kind: 'warn', title: 'Auto bid: AI problem', msg: r.error, ms: 8000 });
+        await sleep(1000);
+      }
+      missing = requiredMissing();
+      if (missing.length) {
+        const names = missing.map((f) => cleanQ(f.label || f.hint) || f.kind).slice(0, 5);
+        return { status: 'needs', reason: `${steps > 1 ? `${at} - ` : ''}${missing.length} required question${missing.length === 1 ? '' : 's'} not answered: ${names.join(' · ')}`.slice(0, 480), detail: { questions: names } };
+      }
+      for (const [, x] of aiTouched) if (x.kind !== 'textarea') guessedAll.add(x.q || 'A question');
+
+      // The last step (its button says Submit), or a one-page form: done here.
+      const next = findNextButton();
+      if (!next || steps >= 12) break;
+      // The resume is still being read by the site: Continue would not move on yet.
+      for (let t = 0; t < 30 && uploading(); t++) await sleep(500);
+      bidStatus('Next step', `Pressing "${btnLabel(next)}"`);
+      const sig = stepSig();
+      next.click();
+      let moved = false;
+      for (let t = 0; t < 40 && !moved; t++) { await sleep(500); moved = stepSig() !== sig; }
+      if (!moved) {
+        const errs = pageErrors();
+        return { status: 'needs', reason: `${at} was not accepted: ${errs.slice(0, 3).join(' · ') || 'the page did not move on after Continue'}`.slice(0, 480) };
+      }
+      await sleep(1500); // the new step finishes drawing
+      if (visiblePassword()) return { status: 'needs', reason: 'This site asks you to sign in or create an account.' };
     }
 
     // Full auto sends nothing the AI guessed for a fact (yes/no, a choice, years, salary...): a wrong
     // "Yes, I have a clearance" goes to the employer. AI-written essay answers may still go.
-    const guessed = [...aiTouched].filter(([el, x]) => el.isConnected && x.kind !== 'textarea').map(([, x]) => x.q || 'A question');
+    const guessed = [...guessedAll];
     if (mode === 'auto' && guessed.length) {
       toast({ kind: 'warn', title: 'Auto bid: check the AI answers', msg: `The AI answered ${guessed.length} question${guessed.length === 1 ? '' : 's'} (purple). Check ${guessed.length === 1 ? 'it' : 'them'}, then press Submit.`, ms: 0 });
       return { status: 'review', reason: `Not sent: the AI answered ${guessed.length} question${guessed.length === 1 ? '' : 's'} - check before submitting: ${guessed.slice(0, 4).join(' · ')}`.slice(0, 480), detail: { aiQuestions: guessed.slice(0, 10) } };
@@ -3438,7 +3495,7 @@
 
     if (mode !== 'auto') {
       toast({ kind: 'ok', title: 'Auto bid: ready for you', msg: `Filled as ${p.label || p.fullName}. Check the answers, then press Submit.`, ms: 0 });
-      return { status: 'review', reason: 'Filled. Check it and press Submit.' };
+      return { status: 'review', reason: steps > 1 ? `Filled ${steps} steps. Check the answers, then press Submit.` : 'Filled. Check it and press Submit.' };
     }
 
     const btn = findSubmitButton(collectFields());

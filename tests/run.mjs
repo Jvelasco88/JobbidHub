@@ -53,6 +53,8 @@ function fakeChrome(profile) {
       case 'logApplication': window.__jbLogged = (window.__jbLogged || 0) + 1; return { ok: true };
       case 'checkApplied': return { ok: true, matches: [] };
       case 'takePendingFill': return { ok: true, pending: null };
+      // Any resume file: a tiny PDF.
+      case 'getFile': return { ok: true, data: 'JVBERi0xLjQKJSVFT0YK' };
       default: return { ok: true };
     }
   };

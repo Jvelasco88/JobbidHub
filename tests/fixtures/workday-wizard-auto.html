@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Workday steps, Full auto</title></head><body>
+<!-- Same steps in Full auto: every answer comes from the profile, so it submits on the last step. -->
+<div id="app"></div>
+<script src="workday-wizard.js"></script>
+<script type="application/json" id="profile">{ "resumes": [{ "id": "r1", "name": "Alex_Rivera_Resume.pdf", "type": "application/pdf", "size": 2000, "sites": "" }], "defaultResumeId": "r1" }</script>
+<script type="application/json" id="expect">{ "autoBid": "auto", "bidStatus": "submitted", "checks": [ { "name": "Thank-you page", "sel": "h1", "text": "Thank you for applying!" } ] }</script>
+</body></html>

@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Workday steps, Review mode</title></head><body>
+<!-- 2026-11-07: Auto-apply stopped on Workday step 1 (only a resume drop box and Continue). It must upload the resume, go through every step, and wait on Review. -->
+<div id="app"></div>
+<script src="workday-wizard.js"></script>
+<script type="application/json" id="profile">{ "resumes": [{ "id": "r1", "name": "Alex_Rivera_Resume.pdf", "type": "application/pdf", "size": 2000, "sites": "" }], "defaultResumeId": "r1" }</script>
+<script type="application/json" id="expect">{ "autoBid": "review", "bidStatus": "review", "checks": [ { "name": "On the Review step", "sel": "h2", "text": "Review" }, { "name": "Name carried to Review", "sel": "#app p:nth-of-type(3)", "text": "Name: Alex Rivera" }, { "name": "Resume uploaded on step 1", "sel": "#rv-resume", "text": "Resume: Alex_Rivera_Resume.pdf" } ] }</script>
+</body></html>
