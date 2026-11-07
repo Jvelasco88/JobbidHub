@@ -145,8 +145,9 @@
     if (!usefulLabel(f.label) || isOneTime(f)) return null;
     const k = answerKey(f.label);
     if (k.length <= 3) return null;
-    if (answers[k] !== undefined) return k;
-    if (f.kind === 'textarea') return null;
+    if (answers[k] != null && String(answers[k]).trim() !== '') return k;
+    // An empty one is a question waiting for an answer: a reworded saved one may have it.
+    if (f.kind === 'textarea') return answers[k] !== undefined ? k : null;
     const qw = qWords(f.label);
     if (qw.size < 3) return null;
     let best = null, bestScore = 0, second = 0;
@@ -3215,6 +3216,28 @@
     return lastFill ? lastFill.profile : ctx.profile;
   }
 
+  // Answers are learned only on application pages. Gmail, ChatGPT and job-board search filters once saved
+  // "To", "Subject", "Search", "Date posted"... as answers, which then went into every box with that label.
+  const NOT_APPLY_HOST = /(^|\.)(mail\.google\.com|docs\.google\.com|calendar\.google\.com|www\.google\.com|outlook\.live\.com|outlook\.office\.com|outlook\.office365\.com|chatgpt\.com|openai\.com|gemini\.google\.com|claude\.ai|perplexity\.ai|copilot\.microsoft\.com|github\.com|stackoverflow\.com|youtube\.com|facebook\.com|x\.com|twitter\.com|reddit\.com)$/;
+  const ATS_HOST = /myworkdayjobs|workday|greenhouse|lever\.co|ashbyhq|icims|smartrecruiters|successfactors|oraclecloud|taleo|jobvite|workable|bamboohr|applytojob|breezy|recruitee|teamtailor|paylocity|ultipro|dayforcehcm|adp\.com|smartapply\.indeed/;
+  const SEARCH_BOX = /^(search|filter|filters|keywords?|sort by|date posted|job type|experience level)\b|search radius|radius within|type to (search|filter)|search for\b/;
+  let applySeen = false, learnPageAt = 0, learnPageOk = false;
+  function learnablePage() {
+    // Google Forms applications are fine.
+    if (NOT_APPLY_HOST.test(location.hostname) && !/^\/forms\//.test(location.pathname)) return false;
+    if (applySeen || lastFill) return true;
+    if (Date.now() - learnPageAt < 2000) return learnPageOk;
+    const fields = collectFields();
+    const keys = new Set(fields.map((f) => ruleFor(f)?.key).filter(Boolean));
+    // A resume upload, or name + email boxes, or an applicant-tracking site's form. Once seen, the later
+    // steps of the same application (screening questions only) count too.
+    learnPageOk = fields.some((f) => f.kind === 'file') || (keys.has('email') && (keys.has('firstName') || keys.has('lastName') || keys.has('phone')))
+      || (ATS_HOST.test(location.hostname) && fields.length >= 2);
+    learnPageAt = Date.now();
+    if (learnPageOk) applySeen = true;
+    return learnPageOk;
+  }
+
   const comboLearned = new WeakMap(); // combobox -> last choice saved
   async function learnFromClick(target) {
     // Custom dropdown: the user picked something if its placeholder went away.
@@ -3253,9 +3276,11 @@
     if (el.closest('#jobbid-root') || el.type === 'password' || el.type === 'file' || el.type === 'checkbox') return;
     fields ||= collectFields();
     if (!clicked && !isForm(fields)) return; // not an application form
+    if (!learnablePage()) return;
     const f = fields.find((x) => x.el === el || (x.els && x.els.includes(el)));
     if (!f || !f.label) return;
-    if (SENSITIVE.test(norm(f.label + ' ' + f.hint))) return;
+    if (SENSITIVE.test(norm(f.label + ' ' + f.hint)) || isOneTime(f)) return;
+    if (SEARCH_BOX.test(norm(f.label)) || el.type === 'search' || el.getAttribute?.('role') === 'searchbox') return;
     const p = await learnContext();
     if (!p) return;
     let rule = ruleFor(f);
