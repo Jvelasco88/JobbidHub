@@ -1,0 +1,17 @@
+# Only the two projects go into git. Candidate resumes, the data file and old copies stay out.
+/*
+!/.gitignore
+!/README.md
+!/JobBidExtension/
+!/JobBidHub/
+
+# Hub data: database, encryption key, settings (backed up separately, never in git)
+/JobBidHub/data/
+/JobBidHub/backups/
+# Downloaded tools and build output
+/JobBidHub/tools/
+node_modules/
+dist/
+*.log
+*.crswap
+.env

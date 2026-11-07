@@ -1,0 +1,171 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    body { width: 360px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .titlebar { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
+    .logo { width: 30px; height: 30px; display: block; }
+    /* Status strip: AI + IP at a glance */
+    .strip { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .chip-stat { display: flex; align-items: center; gap: 7px; min-width: 0; height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid var(--stroke);
+      background: var(--card); color: var(--text-2); font: 12px var(--font); cursor: pointer; text-align: left; }
+    .chip-stat:hover { border-color: var(--stroke-strong); color: var(--text); }
+    .chip-stat > span:last-child { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chip-stat.bad { border-color: var(--danger); background: var(--danger-bg); color: var(--danger); font-weight: 600; }
+    .chip-stat.warn { border-color: var(--warning); background: var(--warning-bg); color: var(--warning); }
+    .dot.ok { background: var(--success); box-shadow: 0 0 0 3px var(--success-bg); }
+    .dot.warn { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-bg); }
+    .item:disabled { opacity: .5; cursor: not-allowed; transform: none; border-color: var(--stroke); }
+    .item small { display: block; font-weight: 400; font-size: 11px; color: var(--text-3); }
+    .item small[hidden] { display: none; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; }
+    .dot.on { background: var(--success); box-shadow: 0 0 0 3px var(--success-bg); }
+    .dot.err { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-bg); }
+    .dot.untested { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-bg); }
+
+    /* Profile hero: who you're applying as + their numbers */
+    .hero { position: relative; border-radius: 14px; padding: 14px; color: #fff; background: var(--grad); box-shadow: var(--shadow-accent); overflow: hidden; }
+    .hero::after { content: ""; position: absolute; right: -40px; top: -50px; width: 160px; height: 160px; border-radius: 50%; background: rgba(255,255,255,.1); pointer-events: none; }
+    .profile { position: relative; display: flex; align-items: center; gap: 12px; cursor: pointer; z-index: 1; }
+    .profile .avatar { box-shadow: 0 0 0 2px rgba(255,255,255,.7); }
+    .profile select { position: absolute; inset: 0; opacity: 0; cursor: pointer; min-height: 0; }
+    .profile .name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .profile .sub { font-size: 12px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .switch-chip { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; padding: 2px 6px 2px 8px; border-radius: 10px; background: rgba(255,255,255,.18); }
+    .stats { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 12px; }
+    .stat { background: rgba(255,255,255,.14); border-radius: 10px; padding: 6px 10px; }
+    .stat b { display: block; font: 600 20px/24px var(--font-display); }
+    .stat span { font-size: 11px; opacity: .85; }
+
+    #fill { width: 100%; }
+    .fill-wrap { display: flex; flex-direction: column; gap: 4px; }
+    .resume-row { display: flex; align-items: center; gap: 6px; padding-left: 4px; }
+    .resume-row .ic { color: var(--text-3); }
+    .resume-row select { min-height: 28px; font-size: 12px; background-color: transparent; border-color: transparent; color: var(--text-2); padding-left: 4px; }
+    .resume-row select:hover { background-color: var(--subtle-hover); }
+
+    /* Action tiles */
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .item { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--card); border: 1px solid var(--stroke); border-radius: var(--r-card); box-shadow: var(--shadow-card);
+      color: var(--text); font: 600 13px/16px var(--font); cursor: pointer; text-align: left; transition: transform .1s, border-color .1s; }
+    .item:hover { border-color: var(--c); transform: translateY(-1px); }
+    .item[aria-expanded=true] { border-color: var(--c); background: var(--cbg); }
+    .item .chip-ic { width: 32px; height: 32px; border-radius: 9px; }
+    .item .chip-ic .ic { width: 16px; height: 16px; }
+    .panel { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .panel[hidden] { display: none; }
+    .panel .t-body-strong { display: flex; align-items: center; gap: 8px; }
+
+    #nowBlock .btn { margin-left: auto; min-height: 26px; padding: 2px 10px; font-size: 12px; white-space: nowrap; flex: none; }
+    #nowBlock { align-items: center; }
+    .foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; font-size: 11px; color: var(--text-3); padding: 0 2px; }
+    kbd { font: 11px var(--font); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--stroke-strong); background: var(--card); }
+    .welcome { text-align: center; padding: 28px 16px; }
+    .welcome .logo { width: 64px; height: 64px; margin: 0 auto 14px; }
+    .hubcard { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
+    .hubrow { display: flex; align-items: center; gap: 8px; }
+    .hubcard .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; }
+    .hubcard .dot.ok { background: var(--success); }
+    .hubcard .dot.bad { background: var(--danger); }
+    #hubForm { display: flex; flex-direction: column; gap: 6px; }
+    #hubForm[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <div class="titlebar">
+    <img class="logo" src="icons/logo.png" alt="JobBid" />
+    <div class="t-body-strong grow">JobBid</div>
+    <div class="lang-seg" role="radiogroup" aria-label="Language">
+      <button type="button" data-lang-opt="en" role="radio" title="English">EN</button><button type="button" data-lang-opt="ko" role="radio" title="한국어">한</button><button type="button" data-lang-opt="zh" role="radio" title="中文">中</button>
+    </div>
+    <button class="btn subtle icon" id="themeBtn" title="Switch light / dark"><i data-icon="moon"></i></button>
+    <button class="btn subtle icon" id="openDash" title="Open dashboard"><i data-icon="settings"></i></button>
+  </div>
+
+  <div class="strip">
+    <button class="chip-stat" id="aiChip"><span class="dot" id="aiDot"></span><span id="aiText">AI not connected</span></button>
+    <button class="chip-stat" id="ipChip"><span class="dot" id="ipDot"></span><span id="ipText">Checking IP...</span></button>
+  </div>
+
+  <div class="card hubcard" id="hubCard">
+    <div class="hubrow"><span class="dot" id="hubDot"></span>
+      <div class="grow"><div class="t-body-strong">JobBid Hub</div><div class="t-caption" id="hubText">Checking...</div></div>
+      <button class="btn subtle" id="hubToggle">Sign in</button></div>
+    <div id="hubForm" hidden>
+      <label class="field"><span>Hub address</span><input id="hubUrl" placeholder="http://192.168.1.20:4417" /></label>
+      <label class="field"><span>Username</span><input id="hubUser" autocomplete="username" /></label>
+      <label class="field"><span>Password</span><input id="hubPass" type="password" autocomplete="current-password" /></label>
+      <div class="hubrow"><button class="btn accent" id="hubConnect">Sign in &amp; sync</button><button class="btn subtle" id="hubSignOut" hidden>Sign out</button></div>
+      <div class="t-caption" id="hubMsg"></div>
+    </div>
+  </div>
+
+  <div id="welcome" class="card welcome" hidden>
+    <img class="logo" src="icons/logo.png" alt="JobBid" />
+    <div class="t-subtitle">Welcome to JobBid</div>
+    <p class="muted" style="margin:6px 0 16px">Profiles come from JobBid Hub. Start the hub (start.bat) and import a resume there, or sign in to your team's hub above.</p>
+    <button class="btn accent" id="getStarted"><i data-icon="upload"></i>Open JobBid Hub</button>
+  </div>
+
+  <div id="main" style="display:none">
+    <div class="hero">
+      <div class="profile" title="Switch profile">
+        <div id="pAvatar"></div>
+        <div class="grow">
+          <div class="name" id="pName"></div>
+          <div class="sub" id="pSub"></div>
+        </div>
+        <span class="switch-chip">Switch<i data-icon="chevronDown"></i></span>
+        <select id="profile" aria-label="Applying as"></select>
+      </div>
+      <div class="stats">
+        <div class="stat"><b id="today">0</b><span>Today</span></div>
+        <div class="stat"><b id="week">0</b><span>7 days</span></div>
+        <div class="stat"><b id="total">0</b><span>Total</span></div>
+      </div>
+    </div>
+
+    <div id="nowBlock" class="infobar" hidden></div>
+    <div id="pageStatus" class="infobar"><i data-icon="search"></i><div>Checking this page...</div></div>
+
+    <div class="fill-wrap">
+      <button class="btn accent lg" id="fill"><i data-icon="bolt" class="lg"></i><span id="fillLabel">Fill application</span></button>
+      <div class="resume-row">
+        <i data-icon="doc"></i>
+        <select id="resume" aria-label="Resume to attach"></select>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="item green" data-panel="logPanel" aria-expanded="false"><span class="chip-ic"><i data-icon="check"></i></span>Log applied</button>
+      <button class="item violet" id="coverTile" data-panel="coverPanel" aria-expanded="false"><span class="chip-ic"><i data-icon="sparkle"></i></span><span>Cover letter<small id="coverNote" hidden>Needs an AI key</small></span></button>
+      <button class="item amber" id="openSchedule"><span class="chip-ic"><i data-icon="calendar"></i></span>Schedule</button>
+      <button class="item blue" id="openApps"><span class="chip-ic"><i data-icon="chart"></i></span>Dashboard</button>
+    </div>
+
+    <div class="card panel" id="logPanel" hidden>
+      <div class="t-body-strong"><i data-icon="briefcase"></i>Save this job to the tracker</div>
+      <label class="field"><span>Job title</span><input id="jobTitle" /></label>
+      <label class="field"><span>Company</span><input id="company" /></label>
+      <button class="btn accent" id="log"><i data-icon="check"></i>Save to tracker</button>
+    </div>
+    <div class="card panel" id="coverPanel" hidden>
+      <div class="t-body-strong"><i data-icon="sparkle"></i>AI cover letter for this job</div>
+      <button class="btn" id="cover"><i data-icon="sparkle"></i>Generate</button>
+      <textarea id="coverText" rows="9" hidden></textarea>
+      <button class="btn" id="copyCover" hidden><i data-icon="copy"></i>Copy to clipboard</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div class="foot"><span><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> to fill</span><span>Multi-step form? Fill each step</span></div>
+  </div>
+
+  <script src="ui.js"></script>
+  <script src="i18n.js"></script>
+  <script src="datasync.js"></script>
+  <script src="hubsync.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
