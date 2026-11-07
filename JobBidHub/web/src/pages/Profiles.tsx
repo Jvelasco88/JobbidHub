@@ -179,7 +179,9 @@ function Editor({ profile }: { profile: Profile }) {
     refresh('boot', 'jobs');
   }, 'Profile saved');
   const remove = () => confirm(t('Delete {name} and their resume files? Applications stay in the tracker.', { name: profileName(p) })) && run('del', async () => {
-    await api(`/profiles/${p.id}`, { method: 'DELETE' });
+    // Privacy: a candidate who leaves can ask for everything to be removed.
+    const erase = confirm(t('Also erase all their history: applications, fill reports and auto-bid queue? OK = erase everything, Cancel = keep the history.'));
+    await api(`/profiles/${p.id}${erase ? '?erase=1' : ''}`, { method: 'DELETE' });
     refresh('boot');
     nav('/profiles');
   }, 'Profile deleted');

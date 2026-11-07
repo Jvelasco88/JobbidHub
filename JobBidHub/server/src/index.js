@@ -12,6 +12,7 @@ import autobidRoutes from './autobid.js';
 import jobLinkRoutes from './joblinks.js';
 import fillReportRoutes from './fillreports.js';
 import proxyRoutes from './proxy.js';
+import backupRoutes, { startBackups } from './backup.js';
 import extensionRoutes from './extension.js';
 import authRoutes from './auth-routes.js';
 import { initAuth } from './auth.js';
@@ -30,7 +31,12 @@ const HOST = process.env.HOST || (networkOn() ? '0.0.0.0' : '127.0.0.1');
 const WEB_DIST = path.join(root, 'web', 'dist');
 const version = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version;
 
-openDb(DB_FILE);
+try {
+  openDb(DB_FILE);
+} catch (e) {
+  console.error(`\n${e.message}\n`);
+  process.exit(1);
+}
 initAuth();
 initNotices();
 
@@ -49,6 +55,15 @@ app.addHook('onRequest', async (req, reply) => {
 });
 await app.register(cors, { delegator: (req, cb) => cb(null, { origin: okOrigin(req.headers.origin, req.headers.host), methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] }) });
 
+// Standard browser protections for the dashboard: no framing by other sites, no type guessing.
+app.addHook('onSend', async (req, reply, payload) => {
+  reply.header('X-Content-Type-Options', 'nosniff');
+  reply.header('X-Frame-Options', 'DENY');
+  reply.header('Referrer-Policy', 'same-origin');
+  if (req.headers['x-forwarded-proto'] === 'https') reply.header('Strict-Transport-Security', 'max-age=15552000');
+  return payload;
+});
+
 app.setErrorHandler((err, req, reply) => {
   const code = err.statusCode || 500;
   if (code >= 500) req.log.error(err);
@@ -62,6 +77,7 @@ await app.register(autobidRoutes);
 await app.register(jobLinkRoutes);
 await app.register(fillReportRoutes);
 await app.register(proxyRoutes);
+await app.register(backupRoutes);
 await app.register(extensionRoutes);
 
 // The dashboard (built with "npm run build" in web/). Unknown non-API paths return index.html (client-side routing).
@@ -73,6 +89,7 @@ if (fs.existsSync(path.join(WEB_DIST, 'index.html'))) {
 }
 
 startScheduler(app.log);
+startBackups(DB_FILE, app.log);
 startTunnel(app.log);
 
 try {

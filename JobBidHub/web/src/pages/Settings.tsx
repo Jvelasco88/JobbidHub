@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Palette, Plug, Database, Upload, Download, Wand2, Trash2, RefreshCw, Puzzle, Check, KeyRound, Bot, CheckCircle2, XCircle, Network, Copy, Globe } from 'lucide-react';
+import { Palette, Plug, Database, Upload, Download, Wand2, Trash2, RefreshCw, Puzzle, Check, KeyRound, Bot, CheckCircle2, XCircle, Network, Copy, Globe, Archive, HardDrive, AlertTriangle } from 'lucide-react';
 import { api, withToken, refresh, useBoot, useMe } from '../api';
 import { useQuery } from '@tanstack/react-query';
 import { usePrefs, type Prefs } from '../prefs';
@@ -102,6 +102,7 @@ export default function Settings() {
         <GetExtension />
         {admin && <NetworkCard />}
         {admin && <TunnelCard />}
+        {admin && <BackupCard />}
 
         {admin && <>
         <Card title={t('Extension defaults for all accounts')} icon={<Puzzle className="size-4" />}>
@@ -224,6 +225,72 @@ function TunnelCard() {
           <div>
             <button type="button" className="text-[12px] font-semibold text-accent" onClick={() => setLog(!log)}>{log ? t('Hide details') : t('Show details')}</button>
             {log && <pre className="mt-1 max-h-48 overflow-auto rounded-[8px] bg-sunken p-2 text-[11px] leading-snug">{st.lines.join('\n')}</pre>}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// Automatic daily backups: database + encryption key + hub settings, checked, the newest N kept.
+type BackupItem = { name: string; at: string; size: number };
+type BackupView = {
+  config: { copyTo: string; keep: number; everyHours: number };
+  state: { lastOk?: string; lastSize?: number; lastCounts?: { profiles: number; applications: number; files: number }; lastError?: string; lastErrorAt?: string; copyError?: string; copiedAt?: string };
+  localDir: string; local: BackupItem[]; copies: BackupItem[]; overdue: boolean; running: boolean;
+};
+const mb = (n?: number) => ((n || 0) / 1048576).toFixed(1) + ' MB';
+function BackupCard() {
+  const { t } = usePrefs();
+  const { busy, run } = useAction();
+  const q = useQuery({ queryKey: ['admin', 'backups'], queryFn: () => api<BackupView>('/admin/backups') });
+  const v = q.data;
+  const [copyTo, setCopyTo] = useState<string | null>(null);
+  const dir = copyTo ?? v?.config.copyTo ?? '';
+  const st = v?.state || {};
+  const failedLast = !!st.lastError && (!st.lastOk || (st.lastErrorAt || '') > st.lastOk);
+  const save = (body: any, ok: string) => run('bk-save', async () => { await api('/admin/backups', { method: 'PUT', body }); setCopyTo(null); await q.refetch(); }, ok);
+  return (
+    <Card title={t('Backups')} icon={<Archive className="size-4" />}>
+      <p className="-mt-1 mb-3 text-[12.5px] text-muted">{t('Once a day the hub saves a copy of the database, the encryption key and its settings, and checks that the copy opens.')}</p>
+      <div className="flex flex-col gap-3">
+        <div className={cx('flex items-start gap-2 rounded-[10px] border px-3 py-2 text-[12.5px]',
+          failedLast ? 'border-bad/30 bg-bad/10 text-bad' : v?.overdue ? 'border-warn/30 bg-warn/10 text-warn' : 'border-good/30 bg-good/10 text-good')}>
+          {failedLast || v?.overdue ? <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> : <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />}
+          <span className="min-w-0 flex-1">
+            {failedLast ? t('Last backup failed: {e}', { e: st.lastError })
+              : st.lastOk ? t('Last backup {when} · {size} · {p} profiles, {a} applications', { when: ago(st.lastOk, t), size: mb(st.lastSize), p: st.lastCounts?.profiles ?? 0, a: st.lastCounts?.applications ?? 0 })
+              : t('No backup yet.')}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="primary" icon={<Archive className="size-4" />} busy={busy === 'bk-run'}
+            onClick={() => run('bk-run', async () => { const r = await api<{ ok: boolean; error?: string }>('/admin/backups/run', { method: 'POST' }); await q.refetch(); if (!r.ok) throw new Error(r.error); }, 'Backup saved')}>{t('Back up now')}</Button>
+          <span className="text-[12px] text-muted">{t('Kept: the newest')}</span>
+          <Input type="number" min={3} max={90} defaultValue={v?.config.keep ?? 14} key={v?.config.keep}
+            onBlur={(e) => Number(e.target.value) !== v?.config.keep && save({ keep: Number(e.target.value) }, 'Saved')} className="w-[72px]" />
+        </div>
+        <Field label={t('Second copy, off this PC')} hint={t('A OneDrive, Google Drive or USB-disk folder. If this PC breaks, the copies there survive. Leave empty to keep backups only on this PC.')}>
+          <div className="flex gap-2">
+            <Input value={dir} onChange={(e) => setCopyTo(e.target.value)} placeholder="C:\Users\you\OneDrive\JobBid backups" className="font-mono" />
+            <Button busy={busy === 'bk-save'} disabled={copyTo == null || dir === v?.config.copyTo} onClick={() => save({ copyTo: dir }, dir ? 'Saved' : 'Second copy turned off')}>{t('Save')}</Button>
+          </div>
+        </Field>
+        {v && !v.config.copyTo && <p className="-mt-1 text-[12.5px] text-warn">{t('Backups are only on this PC. Set a second folder so a broken disk does not lose everything.')}</p>}
+        {!!st.copyError && <p className="-mt-1 text-[12.5px] text-bad">{st.copyError}</p>}
+        {!!v?.local.length && (
+          <div className="border-t border-line pt-3">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[12px] text-muted"><HardDrive className="size-3.5" /><span className="truncate font-mono">{v.localDir}</span></div>
+            <ul className="flex flex-col gap-1">
+              {v.local.slice(0, 5).map((b) => (
+                <li key={b.name} className="flex items-center gap-2 text-[12.5px]">
+                  <span className="min-w-0 flex-1 truncate font-mono">{b.name}</span>
+                  {v.copies.some((c) => c.name === b.name) && <Badge tone="good">{t('also off this PC')}</Badge>}
+                  <span className="text-muted">{mb(b.size)}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[12px] text-muted">{t('To restore, open the backup folder and follow README.txt.')}</p>
           </div>
         )}
       </div>

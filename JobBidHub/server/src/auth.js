@@ -2,7 +2,9 @@
 // Passwords are stored only as salted scrypt hashes. A session is a random token in an httpOnly cookie.
 // Every sign-in attempt (success or not) is kept in login_log for the admin's "Login history".
 import crypto from 'node:crypto';
-import { getDb, getMeta, setMeta } from './db.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { getDb, getMeta, setMeta, dataDir } from './db.js';
 import { uid, nowIso } from './util.js';
 
 export const COOKIE = 'jb_session';
@@ -10,8 +12,14 @@ const SESSION_DAYS = 14;
 const MAX_FAILS = 5; // per username + IP in 10 minutes
 const FAIL_WINDOW_MS = 10 * 60 * 1000;
 
-// First admin, created once when the hub has no admin. Change the password after the first sign-in.
-const FIRST_ADMIN = { username: 'admin', password: 'sunny20260418', name: 'Administrator' };
+const MAX_IP_FAILS = 20; // per IP over all usernames in 10 minutes (someone trying many names)
+
+// First admin, created once when the hub has no admin, with a random password shown in the hub window
+// and saved to data/first-admin-password.txt. Hubs installed earlier used OLD_DEFAULT; it counts as weak.
+const OLD_DEFAULT = 'sunny20260418';
+const FIRST_ADMIN = { username: 'admin', name: 'Administrator' };
+// Signed in with a password anyone could guess: the dashboard asks to change it.
+const isWeak = (pw) => String(pw) === OLD_DEFAULT || String(pw).length < 10 || /^(.)\1+$|^(password|admin|12345|qwerty)/i.test(String(pw));
 
 const db = () => getDb();
 
@@ -37,7 +45,12 @@ export function initAuth() {
   if (!db().prepare("SELECT 1 FROM users WHERE role = 'admin'").get()) {
     const existing = db().prepare('SELECT id FROM users WHERE username = ?').get(FIRST_ADMIN.username);
     if (existing) db().prepare("UPDATE users SET role = 'admin', disabled = 0 WHERE id = ?").run(existing.id);
-    else createUser({ ...FIRST_ADMIN, role: 'admin' });
+    else {
+      const password = crypto.randomBytes(12).toString('base64url');
+      createUser({ ...FIRST_ADMIN, password, role: 'admin' });
+      try { fs.writeFileSync(path.join(dataDir(), 'first-admin-password.txt'), `JobBid Hub first sign-in\nusername: admin\npassword: ${password}\n\nChange it after signing in (My account), then delete this file.\n`, { mode: 0o600 }); } catch { /* shown below anyway */ }
+      console.log(`\n  First sign-in: username admin, password ${password}\n  (also saved in data/first-admin-password.txt - change it after signing in)\n`);
+    }
   }
   db().prepare('DELETE FROM sessions WHERE expires_at < ?').run(nowIso());
 }
@@ -61,7 +74,7 @@ export function verifyPassword(userId, pw) {
   return !!row && checkPassword(pw, row.pass);
 }
 export function passwordProblem(pw) {
-  if (String(pw || '').length < 6) return 'Password must be at least 6 characters.';
+  if (String(pw || '').length < 8) return 'Password must be at least 8 characters.';
   if (String(pw).length > 200) return 'Password is too long.';
   return '';
 }
@@ -70,7 +83,7 @@ export function passwordProblem(pw) {
 
 const PUBLIC = 'id, username, name, role, disabled, pending, profile_ids, email, phone, prefs, note, created_at, updated_at, last_login, login_count, pass_changed_at';
 const toUser = (r) => r && ({ id: r.id, username: r.username, name: r.name || r.username, role: r.role, disabled: !!r.disabled, pending: !!r.pending, profileIds: parseIds(r.profile_ids), email: r.email || '', phone: r.phone || '', prefs: parseObj(r.prefs), note: r.note || '',
-  createdAt: r.created_at, updatedAt: r.updated_at, lastLogin: r.last_login || '', loginCount: r.login_count || 0, passChangedAt: r.pass_changed_at || '' });
+  createdAt: r.created_at, updatedAt: r.updated_at, lastLogin: r.last_login || '', loginCount: r.login_count || 0, passChangedAt: r.pass_changed_at || '', weakPassword: getMeta(`weakpw:${r.id}`, '') === '1' });
 
 const parseObj = (s) => { try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } };
 const parseIds = (s) => { try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
@@ -142,6 +155,7 @@ export function setPassword(id, password, { keepToken = '' } = {}) {
   const p = passwordProblem(password);
   if (p) throw err(400, p);
   db().prepare('UPDATE users SET pass = ?, pass_changed_at = ?, updated_at = ? WHERE id = ?').run(hashPassword(password), nowIso(), nowIso(), id);
+  setMeta(`weakpw:${id}`, isWeak(password) ? '1' : '');
   // A new password signs out every other device of that account.
   db().prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(id, keepToken);
 }
@@ -205,6 +219,11 @@ export function login(username, password, { ip = '', ua = '' } = {}) {
     logAttempt(username, '', false, 'locked', ip, ua);
     throw err(429, 'Too many wrong passwords. Wait 10 minutes and try again.');
   }
+  const ipFails = ip ? db().prepare('SELECT COUNT(*) AS n FROM login_log WHERE ok = 0 AND ip = ? AND at > ? AND reason != ?').get(ip, since, 'locked').n : 0;
+  if (ipFails >= MAX_IP_FAILS) {
+    logAttempt(username, '', false, 'locked', ip, ua);
+    throw err(429, 'Too many wrong sign-ins from this address. Wait 10 minutes and try again.');
+  }
   const row = db().prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!row || !checkPassword(password, row.pass)) {
     logAttempt(username, row?.id, false, row ? 'wrong password' : 'unknown user', ip, ua);
@@ -224,6 +243,7 @@ export function login(username, password, { ip = '', ua = '' } = {}) {
     .run(token, row.id, at, at, new Date(Date.now() + SESSION_DAYS * 864e5).toISOString(), ip, String(ua || '').slice(0, 300));
   db().prepare('UPDATE users SET last_login = ?, login_count = COALESCE(login_count, 0) + 1 WHERE id = ?').run(at, row.id);
   logAttempt(row.username, row.id, true, 'signed in', ip, ua);
+  setMeta(`weakpw:${row.id}`, isWeak(password) ? '1' : '');
   return { token, user: getUser(row.id), maxAge: SESSION_DAYS * 86400 };
 }
 

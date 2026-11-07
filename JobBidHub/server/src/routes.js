@@ -138,7 +138,7 @@ export default async function routes(app, { version }) {
   });
   app.delete('/api/profiles/:id', async (req) => {
     mustSee(req, req.params.id);
-    db.deleteProfile(req.params.id);
+    db.deleteProfile(req.params.id, { erase: req.query?.erase === '1' });
     rescoreSoon();
     return { ok: true };
   });

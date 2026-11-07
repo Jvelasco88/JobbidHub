@@ -265,7 +265,7 @@ function AccountEditor({ value, onClose, onSaved, isSelf }: { value: Partial<Use
             <option value="admin">{t('Admin')}</option>
           </Select>
         </Field>
-        {isNew && <Field label={t('Password')} className="sm:col-span-2" hint={t('At least 6 characters. Give it to the person; they can change it later.')}><PasswordInput value={f.password || ''} onChange={(v) => up({ password: v })} /></Field>}
+        {isNew && <Field label={t('Password')} className="sm:col-span-2" hint={t('At least 8 characters. Give it to the person; they can change it later.')}><PasswordInput value={f.password || ''} onChange={(v) => up({ password: v })} /></Field>}
         {f.role !== 'admin' && (
           <Field label={t('Profiles this account can use')} className="sm:col-span-2" hint={t('Only these candidates show up for this account, in the hub and in their Chrome extension.')}>
             <div className="flex flex-wrap gap-1.5">
@@ -310,7 +310,7 @@ function ResetPassword({ user, onClose }: { user: User | null; onClose: () => vo
   });
   return (
     <Modal open={!!user} onClose={onClose} title={t('Reset password')}
-      footer={<><Button variant="ghost" onClick={onClose}>{t('Cancel')}</Button><Button variant="primary" busy={busy === 'reset'} disabled={pw.length < 6} onClick={save}>{t('Set password')}</Button></>}>
+      footer={<><Button variant="ghost" onClick={onClose}>{t('Cancel')}</Button><Button variant="primary" busy={busy === 'reset'} disabled={pw.length < 8} onClick={save}>{t('Set password')}</Button></>}>
       <p className="mb-3 text-[13px] text-muted">{t('{name} will be signed out on every device and must use the new password.', { name: user?.name || '' })}</p>
       <PasswordInput value={pw} onChange={setPw} autoFocus />
     </Modal>

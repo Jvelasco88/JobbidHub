@@ -1,6 +1,6 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useEffect, useState, type ReactNode } from 'react';
-import { LayoutDashboard, Briefcase, Radar, ListChecks, Users, MessageSquareText, CalendarClock, KeyRound, Settings as Cog, Sun, Moon, Monitor, PanelLeftClose, PanelLeftOpen, PanelTop, Languages, Menu as MenuIcon, X, WifiOff, ShieldCheck, LogOut, Lock, NotebookPen, UserCircle, Bot, Puzzle, CircleHelp, Link2, Bug, Network } from 'lucide-react';
+import { LayoutDashboard, Briefcase, Radar, ListChecks, Users, MessageSquareText, CalendarClock, KeyRound, Settings as Cog, Sun, Moon, Monitor, PanelLeftClose, PanelLeftOpen, PanelTop, Languages, Menu as MenuIcon, X, WifiOff, ShieldCheck, LogOut, Lock, NotebookPen, UserCircle, Bot, Puzzle, CircleHelp, Link2, Bug, Network, ShieldAlert } from 'lucide-react';
 import { api, qc, setToken, useBoot, useMe, profileName } from './api';
 import { usePrefs } from './prefs';
 import { Avatar, Button, cx, Field, IconButton, Input, Loading, Menu, MenuItem, Modal, useAction } from './components/ui';
@@ -120,6 +120,24 @@ function ServerBanner() {
   );
 }
 
+// Signed in with the old default password or a short one: anyone could guess it through the internet address.
+function WeakPasswordBanner() {
+  const { data: me } = useMe();
+  const { t } = usePrefs();
+  const [open, setOpen] = useState(false);
+  if (!me?.weakPassword) return null;
+  return (
+    <>
+    <ChangePassword open={open} onClose={() => setOpen(false)} />
+    <div className="mb-[var(--gap)] flex flex-wrap items-center gap-2.5 rounded-[12px] border border-warn/30 bg-warn/10 px-4 py-3 text-[13px] text-warn">
+      <ShieldAlert className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1"><b>{t('Your password is easy to guess.')}</b> {t('The hub can be opened from the internet, so use at least 10 characters that are not the default password.')}</span>
+      <Button size="sm" variant="primary" onClick={() => setOpen(true)}>{t('Change password')}</Button>
+    </div>
+    </>
+  );
+}
+
 function NavItems({ collapsed, onPick }: { collapsed?: boolean; onPick?: () => void }) {
   const { t } = usePrefs();
   const { data: me } = useMe();
@@ -184,14 +202,15 @@ function ChangePassword({ open, onClose }: { open: boolean; onClose: () => void 
   const save = () => run('pw', async () => {
     await api('/auth/password', { body: { current: f.current, password: f.password } });
     setF({ current: '', password: '', again: '' });
+    qc.invalidateQueries({ queryKey: ['me'] });
     onClose();
   }, 'Password changed');
   return (
     <Modal open={open} onClose={onClose} title={t('Change password')}
-      footer={<><Button variant="ghost" onClick={onClose}>{t('Cancel')}</Button><Button variant="primary" busy={busy === 'pw'} disabled={!f.current || f.password.length < 6 || f.password !== f.again} onClick={save}>{t('Save')}</Button></>}>
+      footer={<><Button variant="ghost" onClick={onClose}>{t('Cancel')}</Button><Button variant="primary" busy={busy === 'pw'} disabled={!f.current || f.password.length < 8 || f.password !== f.again} onClick={save}>{t('Save')}</Button></>}>
       <div className="flex flex-col gap-3">
         <Field label={t('Current password')}><Input type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} autoFocus /></Field>
-        <Field label={t('New password')} hint={t('At least 6 characters. Your other devices will be signed out.')}><Input type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
+        <Field label={t('New password')} hint={t('At least 8 characters (10 or more is better). Your other devices will be signed out.')}><Input type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></Field>
         <Field label={t('New password again')} hint={mismatch ? <span className="text-bad">{t('The two passwords are different.')}</span> : undefined}><Input type="password" autoComplete="new-password" value={f.again} onChange={(e) => setF({ ...f, again: e.target.value })} /></Field>
       </div>
     </Modal>
@@ -268,6 +287,7 @@ function Shell() {
   const pages = (
     <main className="mx-auto w-full max-w-[1500px] p-4 md:p-6">
       <ServerBanner />
+      <WeakPasswordBanner />
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/jobs" element={<Jobs />} />

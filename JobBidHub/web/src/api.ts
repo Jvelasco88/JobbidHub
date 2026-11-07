@@ -81,7 +81,7 @@ export const qc = new QueryClient({
 
 // Shared queries.
 export type User = { id: string; username: string; name: string; role: 'admin' | 'user'; disabled: boolean; pending?: boolean; profileIds?: string[]; email?: string; phone?: string; prefs?: Record<string, any>; note: string; createdAt: string; updatedAt: string;
-  lastLogin: string; loginCount: number; passChangedAt: string; activeSessions?: number; lastSeen?: string };
+  lastLogin: string; loginCount: number; passChangedAt: string; weakPassword?: boolean; activeSessions?: number; lastSeen?: string };
 export const useMe = () => useQuery({ queryKey: ['me'], queryFn: () => api<{ user: User }>('/auth/me').then((r) => r.user), retry: false, staleTime: 60_000,
   // While the server is down, keep checking so the page reconnects by itself.
   refetchInterval: (q) => ((q.state.error as any)?.status === 0 ? 4000 : false) });

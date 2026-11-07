@@ -56,7 +56,7 @@ export default function Login() {
   };
   const signUp = async () => {
     if (!f.username.trim() || !f.password) return setError(t('Enter your username and password.'));
-    if (f.password.length < 6) return setError(t('Password must be at least 6 characters.'));
+    if (f.password.length < 8) return setError(t('Password must be at least 8 characters.'));
     if (f.password !== f.again) return setError(t('The two passwords are different.'));
     const r = await api<{ pending?: boolean; token?: string }>('/auth/signup', { body: { username: f.username.trim(), name: f.name.trim(), password: f.password } });
     if (r.token) { setToken(r.token); location.replace('/'); return; }
@@ -122,7 +122,7 @@ export default function Login() {
           <Labeled label={t('Username')} icon={<UserIcon className="size-4" />} hint={mode === 'up' ? t('3-40 letters, numbers or . _ @ -') : undefined}>
             <input autoFocus={mode === 'in'} autoComplete="username" value={f.username} onChange={(e) => up({ username: e.target.value })} className={field} />
           </Labeled>
-          <Labeled label={t('Password')} icon={<Lock className="size-4" />} hint={mode === 'up' ? t('At least 6 characters') : undefined}>
+          <Labeled label={t('Password')} icon={<Lock className="size-4" />} hint={mode === 'up' ? t('At least 8 characters') : undefined}>
             <PasswordField value={f.password} onChange={(v) => up({ password: v })} autoComplete={mode === 'in' ? 'current-password' : 'new-password'} />
           </Labeled>
           {mode === 'up' && (

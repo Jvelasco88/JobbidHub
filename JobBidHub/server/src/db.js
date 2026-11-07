@@ -13,15 +13,26 @@ import { nowIso, normalizeUrl, siteOf } from './util.js';
 export const LOCAL_ONLY = ['syncState', 'hubConfig', 'hubState', 'lastBlockKey', 'panelCollapsed', 'panelWidth', 'panelPos', 'tabTop', 'panelTab', 'keyHealth', 'aiStatus', 'jobCache', 'ipInfo', 'lastKeyCheck', 'extUpdate', 'proxyCfg', 'proxyState'];
 
 let db;
+let dir = '';
+// The data folder (database, secret.key, hub-config.json).
+export const dataDir = () => dir;
 
 // ---------- Profile secrets (the job-sites password) are encrypted on disk ----------
 // AES-256-GCM with a random key kept next to the database (data/secret.key), made on first start.
 // Profiles are encrypted when written and decrypted when read, so every other part sees plain text.
 let secretKey = null;
-function loadSecretKey(dir) {
+function loadSecretKey(dir, dbFile) {
   const f = path.join(dir, 'secret.key');
   try { secretKey = Buffer.from(fs.readFileSync(f, 'utf8').trim(), 'base64'); } catch { /* first start */ }
   if (!secretKey || secretKey.length !== 32) {
+    // A database without its key: a new key would make every saved password unreadable, silently.
+    if (fs.existsSync(dbFile) && fs.statSync(dbFile).size > 0 && process.env.JOBBID_NEW_KEY !== '1') {
+      throw new Error([
+        `JobBid Hub did not start: ${f} is missing or damaged, but the database already exists.`,
+        String.raw`Copy secret.key back from a backup (JobBidHub\backups\<newest>\secret.key) into the data folder, then start again.`,
+        'No backup? Start once with JOBBID_NEW_KEY=1 to make a new key - saved job-site and proxy passwords then have to be typed again.',
+      ].join('\n'));
+    }
     secretKey = crypto.randomBytes(32);
     fs.writeFileSync(f, secretKey.toString('base64'), { mode: 0o600 });
   }
@@ -68,7 +79,8 @@ export function jobsVersion() {
 
 export function openDb(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  loadSecretKey(path.dirname(file));
+  dir = path.dirname(file);
+  loadSecretKey(dir, file);
   db = new DatabaseSync(file);
   db.exec(`
     PRAGMA journal_mode = WAL;
@@ -187,12 +199,18 @@ export function saveProfile(p) {
   bumpRev();
   return p;
 }
-export function deleteProfile(id) {
+// erase: also everything recorded about this candidate (a candidate who leaves asks for this).
+export function deleteProfile(id, { erase = false } = {}) {
   const p = getProfile(id);
+  const has = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
   tx(() => {
     db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
     // Resume files that belonged only to this profile.
     for (const r of p?.resumes || []) db.prepare('DELETE FROM files WHERE id = ?').run(r.id);
+    if (erase) {
+      db.prepare('DELETE FROM applications WHERE profile_id = ?').run(id);
+      for (const t of ['fill_problems', 'fill_reports', 'bids', 'job_activity']) if (has(t)) db.prepare(`DELETE FROM ${t} WHERE profile_id = ?`).run(id);
+    }
   });
   bumpRev();
 }
