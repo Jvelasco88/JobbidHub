@@ -6,6 +6,7 @@ import * as db from './db.js';
 import * as jobs from './jobs.js';
 import { sees, jobFilter } from './scope.js';
 import { uid, nowIso, companyKey } from './util.js';
+import { addNotice } from './notices.js';
 
 const httpError = (code, message) => Object.assign(new Error(message), { statusCode: code });
 
@@ -22,6 +23,12 @@ export const DEFAULT_CONFIG = {
 const ACTIVE = ['queued', 'running'];
 const DONE_OK = ['submitted', 'review'];
 const MAX_OPEN_REVIEWS = 3; // review tabs waiting for you before new ones stop opening
+const MAX_FAIL_STREAK = 5; // problems in a row before auto bid stops by itself (keys, proxy or a site broke)
+// Submit was pressed but no confirmation was seen: it may have gone through, so it is never sent again by
+// itself, and it counts toward the day's limit.
+const PRESSED = "json_extract(detail, '$.submitPressed') = 1";
+// Applications that count toward a profile's limit for today, over every account that runs this profile.
+const doneTodaySql = `(status IN ('submitted', 'review') OR ${PRESSED}) AND finished_at >= ?`;
 
 function initTable() {
   db.getDb().exec(`
@@ -163,6 +170,8 @@ export default async function autobidRoutes(app) {
     const queued = db.getDb().prepare('SELECT COUNT(*) AS n FROM bids WHERE owner_id = ? AND status = \'queued\'').get(req.user.id).n;
     cfg.running = queued > 0;
     cfg.nextAt = '';
+    cfg.failStreak = 0;
+    cfg.stopReason = '';
     saveConfig(req.user.id, cfg);
     return { ...view(req), stats };
   });
@@ -176,15 +185,22 @@ export default async function autobidRoutes(app) {
 
   // Remove waiting items, or finished ones ("clear the list").
   app.post('/api/autobid/clear', async (req) => {
-    const which = req.body?.which === 'queued' ? ['queued'] : ['submitted', 'review', 'needs', 'skipped', 'failed'];
-    db.getDb().prepare(`DELETE FROM bids WHERE owner_id = ? AND status IN (${which.map(() => '?').join(', ')})`).run(req.user.id, ...which);
+    // Filled-for-you forms and pressed Submits stay: without them the same job could be queued again.
+    const which = req.body?.which === 'queued' ? ['queued'] : ['submitted', 'needs', 'skipped', 'failed'];
+    const keep = req.body?.which === 'queued' ? '' : ` AND NOT (${PRESSED})`;
+    db.getDb().prepare(`DELETE FROM bids WHERE owner_id = ? AND status IN (${which.map(() => '?').join(', ')})${keep}`).run(req.user.id, ...which);
     return view(req);
   });
 
   app.post('/api/autobid/items/:id/retry', async (req) => {
     const r = db.getDb().prepare('SELECT * FROM bids WHERE id = ? AND owner_id = ?').get(req.params.id, req.user.id);
     if (!r) throw httpError(404, 'Not found');
-    setBid(r.id, { status: 'queued', reason: '', startedAt: '', finishedAt: '' });
+    // It may already have been sent: only when you say so (you checked the tab or the email).
+    const sent = r.status === 'submitted' || r.status === 'review' || !!J(r.detail, {}).submitPressed;
+    if (sent && !req.body?.force) throw httpError(409, r.status === 'review' ? 'This form was filled for you. If you pressed Submit in that tab, trying again applies twice.' : 'Submit was already pressed for this job. Trying again may apply twice.');
+    const detail = J(r.detail, {});
+    delete detail.submitPressed;
+    setBid(r.id, { status: 'queued', reason: '', startedAt: '', finishedAt: '', detail });
     return view(req);
   });
   app.delete('/api/autobid/items/:id', async (req) => {
@@ -211,20 +227,25 @@ export default async function autobidRoutes(app) {
     const waitMs = cfg.nextAt ? new Date(cfg.nextAt) - Date.now() : 0;
     if (waitMs > 0) return { wait: waitMs, why: 'Pause between applications', config: cfg };
 
-    const today = counts(ownerId).today;
+    const today = Object.fromEntries(db.getDb().prepare(`SELECT profile_id, COUNT(*) AS n FROM bids WHERE ${doneTodaySql} GROUP BY profile_id`).all(startOfDay()).map((r) => [r.profile_id, r.n]));
     const queued = db.getDb().prepare('SELECT * FROM bids WHERE owner_id = ? AND status = \'queued\' ORDER BY created_at, score DESC').all(ownerId).map(rowToBid);
     const apps = db.listApplications();
+    let limited = 0; // still queued, but their profile reached today's limit
     for (const b of queued) {
       if (!sees(req.scope, b.profileId)) continue;
-      if ((today[b.profileId] || 0) >= cfg.perDay) continue; // this profile's limit for today
+      if ((today[b.profileId] || 0) >= cfg.perDay) { limited++; continue; } // this profile's limit for today
       // Applied meanwhile (by hand, or from another Chrome): skip.
       const job = db.getJob(b.jobId);
       if (!job) { setBid(b.id, { status: 'skipped', reason: 'The job was removed from the board.', finishedAt: nowIso() }); continue; }
       if (jobs.appliedFor(job, apps).some((a) => a.profileId === b.profileId)) { setBid(b.id, { status: 'skipped', reason: 'Already applied with this profile.', finishedAt: nowIso() }); continue; }
+      // Another account runs the same profile and has this job going or done.
+      const other = db.getDb().prepare(`SELECT 1 FROM bids WHERE profile_id = ? AND job_id = ? AND id != ? AND (status IN ('running', 'submitted', 'review') OR ${PRESSED})`).get(b.profileId, b.jobId, b.id);
+      if (other) { setBid(b.id, { status: 'skipped', reason: 'Another account is applying (or applied) to this job with this profile.', finishedAt: nowIso() }); continue; }
       setBid(b.id, { status: 'running', startedAt: nowIso() });
       return { item: { ...b, status: 'running', mode: cfg.mode }, config: cfg };
     }
-    if (queued.some((b) => sees(req.scope, b.profileId))) return { wait: 10 * 60000, why: 'Daily limit reached for the profiles left in the queue', config: cfg };
+    // Only jobs held back by the limit mean waiting; the ones just skipped are done.
+    if (limited) return { wait: 10 * 60000, why: 'Daily limit reached for the profiles left in the queue', config: cfg };
     cfg.running = false; // nothing left
     saveConfig(ownerId, cfg);
     return { done: true, config: cfg };
@@ -243,6 +264,17 @@ export default async function autobidRoutes(app) {
     }
     // The pause before the next application starts now.
     const cfg = getConfig(req.user.id);
+    // Problems in a row (not "job closed" or "already applied"): something is broken - stop instead of
+    // running through the whole queue.
+    // "Needs you" counts only in Full auto: in Review mode those tabs stay open and already pause the queue at 3.
+    if ((status === 'failed' || (status === 'needs' && cfg.mode === 'auto')) && !b.detail?.submitPressed) cfg.failStreak = (cfg.failStreak || 0) + 1;
+    else if (['submitted', 'review'].includes(status)) cfg.failStreak = 0;
+    if (cfg.running && (cfg.failStreak || 0) >= MAX_FAIL_STREAK) {
+      cfg.running = false;
+      cfg.failStreak = 0;
+      cfg.stopReason = `Stopped by itself after ${MAX_FAIL_STREAK} problems in a row. Last one: ${String(b.reason || status).slice(0, 200)}`;
+      addNotice({ actor: 'JobBid', audience: `user:${req.user.id}`, kind: 'autobid', changes: [{ label: 'Auto bid', value: cfg.stopReason }] });
+    }
     const mins = cfg.gapMin + Math.random() * Math.max(0, cfg.gapMax - cfg.gapMin);
     cfg.nextAt = ['submitted', 'review'].includes(status) ? new Date(Date.now() + mins * 60000).toISOString() : new Date(Date.now() + 5000).toISOString();
     saveConfig(req.user.id, cfg);

@@ -2,13 +2,13 @@
 // a pop-up for each new one while the page is open, and the list of recent ones.
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, Settings as Cog, UserCog, UserPlus, Puzzle, CheckCheck, KeyRound } from 'lucide-react';
+import { Bell, Settings as Cog, UserCog, UserPlus, Puzzle, CheckCheck, KeyRound, Bot } from 'lucide-react';
 import { api, qc } from '../api';
 import { usePrefs } from '../prefs';
 import { Button, IconButton, Modal, ago, cx, useToast } from './ui';
 
 export type Notice = {
-  id: number; at: string; actor: string; actorId: string; mine: boolean; audience: string; kind: 'settings' | 'access' | 'signup' | 'prefs' | 'ai-key';
+  id: number; at: string; actor: string; actorId: string; mine: boolean; audience: string; kind: 'settings' | 'access' | 'signup' | 'prefs' | 'ai-key' | 'autobid';
   unread: boolean; via?: 'dashboard' | 'extension'; target?: string; waiting?: boolean; changes?: { label: string; value: string }[];
 };
 type Notices = { items: Notice[]; unread: number; lastId: number; pendingSignups: number };
@@ -23,6 +23,7 @@ export function useNoticeText() {
     if (n.kind === 'access') return n.audience.startsWith('user:') && !n.target ? t('{actor} changed your account', { actor })
       : t('{actor} changed the account of {target}', { actor, target: n.target || '' });
     if (n.kind === 'ai-key') return t('An AI key needs attention');
+    if (n.kind === 'autobid') return t('Auto bid stopped by itself');
     if (n.kind === 'prefs') return t('{actor} changed their own extension settings', { actor });
     return n.via === 'extension' ? t('{actor} changed settings in the extension', { actor }) : t('{actor} changed settings', { actor });
   };
@@ -30,7 +31,7 @@ export function useNoticeText() {
 
 export const changeLine = (t: (s: string, v?: any) => string, c: { label: string; value: string }) => `${t(c.label)}: ${t(c.value)}`;
 
-const icon = (n: Notice) => (n.kind === 'ai-key' ? KeyRound : n.kind === 'signup' ? UserPlus : n.kind === 'access' ? UserCog : n.via === 'extension' ? Puzzle : Cog);
+const icon = (n: Notice) => (n.kind === 'ai-key' ? KeyRound : n.kind === 'autobid' ? Bot : n.kind === 'signup' ? UserPlus : n.kind === 'access' ? UserCog : n.via === 'extension' ? Puzzle : Cog);
 
 export function AlertsBell({ className }: { className?: string }) {
   const { t } = usePrefs();

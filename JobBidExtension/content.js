@@ -3417,6 +3417,8 @@
     const thanksBefore = BID_SUCCESS.test(document.body.innerText || '');
     promptedFor = location.href; // logged below, so don't also ask "Did you submit?"
     btn.click();
+    // From here on the application may have been sent: the hub never sends it again by itself.
+    const pressed = (r) => ({ ...r, detail: { ...(r.detail || {}), submitPressed: true } });
     const end = Date.now() + 30000;
     while (Date.now() < end) {
       await sleep(1000);
@@ -3427,13 +3429,16 @@
         await logApplication(p);
         return { status: 'submitted', reason: '' };
       }
-      if (captchaShown()) return { status: 'needs', reason: 'A captcha appeared after Submit. Solve it in the tab and submit.' };
+      if (captchaShown()) return pressed({ status: 'needs', reason: 'A captcha appeared after Submit. Solve it in the tab and submit.' });
       if (Date.now() > end - 22000 && requiredMissing().length) {
-        return { status: 'needs', reason: `The site did not accept the form: ${pageErrors().slice(0, 3).join(' · ') || 'a required field is empty'}`.slice(0, 480) };
+        return pressed({ status: 'needs', reason: `The site did not accept the form: ${pageErrors().slice(0, 3).join(' · ') || 'a required field is empty'}`.slice(0, 480) });
       }
     }
     const errs = pageErrors();
-    return { status: 'needs', reason: errs.length ? `The site did not accept the form: ${errs.slice(0, 3).join(' · ')}`.slice(0, 480) : 'No confirmation after Submit. Check the tab.' };
+    if (errs.length) return pressed({ status: 'needs', reason: `The site did not accept the form: ${errs.slice(0, 3).join(' · ')}`.slice(0, 480) });
+    // No error and no "thank you" page: it most likely went through. Logged, so it is never applied to twice.
+    await logApplication(p);
+    return pressed({ status: 'needs', reason: 'Submit was pressed, but no confirmation was seen. Logged as applied - check the tab or your email.' });
   }
 
   // local: "Auto-apply this job" in the panel (this page only, not the hub's queue): the result is shown here.

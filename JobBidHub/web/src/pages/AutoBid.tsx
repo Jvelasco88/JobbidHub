@@ -10,7 +10,7 @@ type Bid = {
   status: 'queued' | 'running' | 'submitted' | 'review' | 'needs' | 'skipped' | 'failed'; reason: string; detail: any;
   createdAt: string; startedAt: string; finishedAt: string;
 };
-type Config = { mode: 'review' | 'auto'; perDay: number; gapMin: number; gapMax: number; onePerCompany: boolean; profileIds: string[]; running: boolean; nextAt: string; lastPoll: string };
+type Config = { mode: 'review' | 'auto'; perDay: number; gapMin: number; gapMax: number; onePerCompany: boolean; profileIds: string[]; running: boolean; nextAt: string; lastPoll: string; stopReason?: string };
 type View = { config: Config; counts: Record<string, any>; items: Bid[]; now: string; stats?: Record<string, number> };
 
 const STATUS: Record<Bid['status'], { label: string; tone: 'neutral' | 'accent' | 'good' | 'warn' | 'bad' | 'info' }> = {
@@ -49,6 +49,17 @@ export default function AutoBid() {
     return r;
   }, ok);
 
+  // A job that may already have been sent is only tried again after you confirm.
+  const mayBeSent = (b: Bid) => b.status === 'review' || !!b.detail?.submitPressed;
+  const retry = (b: Bid) => {
+    if (mayBeSent(b) && !confirm(t(b.status === 'review' ? 'This form was filled for you. If you already pressed Submit in that tab, trying again applies twice. Try again anyway?' : 'Submit was already pressed for this job, so it may have been sent. Try again anyway?'))) return;
+    act('retry' + b.id, `/autobid/items/${b.id}/retry`, { force: mayBeSent(b) });
+  };
+  // Removing it also forgets that this job was done: a later Start could queue it again.
+  const remove = (b: Bid) => {
+    if (mayBeSent(b) && !confirm(t('If this application was sent, log it in Applications first - otherwise a later Start may apply to it again. Remove it?'))) return;
+    run('del' + b.id, async () => qc.setQueryData(['autobid'], await api(`/autobid/items/${b.id}`, { method: 'DELETE' })));
+  };
   const items = useMemo(() => (v?.items || []).filter((b) => filter === 'all' || b.status === filter || (filter === 'queued' && b.status === 'running')), [v, filter]);
   if (!v || !cfg) return <div className="p-6 text-muted">{t('Loading…')}</div>;
   const c = v.counts;
@@ -94,6 +105,7 @@ export default function AutoBid() {
             </div>
             {running && current && <div className="text-[12.5px] text-muted min-w-0 truncate">{t('Now: {job}', { job: `${current.title} · ${current.company} (${current.profileName})` })}</div>}
             {running && !current && waitMs > 0 && <div className="text-[12.5px] text-muted">{t('Next one in {s}s', { s: Math.ceil(waitMs / 1000) })}</div>}
+            {!running && v.config.stopReason && <div className="w-full rounded-[8px] bg-warn/10 px-3 py-2 text-[12.5px] text-warn">{v.config.stopReason}. {t('Fix the cause (AI keys, proxy, the site), then press Start.')}</div>}
           </div>
 
           {/* Counters */}
@@ -133,8 +145,8 @@ export default function AutoBid() {
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
                       <IconButton label={t('Open')} onClick={() => window.open(b.url, '_blank')}><ExternalLink className="size-4" /></IconButton>
-                      {['needs', 'failed', 'skipped', 'review'].includes(b.status) && <IconButton label={t('Try again')} onClick={() => act('retry' + b.id, `/autobid/items/${b.id}/retry`)}><RotateCcw className="size-4" /></IconButton>}
-                      {b.status !== 'running' && <IconButton label={t('Remove')} onClick={() => run('del' + b.id, async () => qc.setQueryData(['autobid'], await api(`/autobid/items/${b.id}`, { method: 'DELETE' })))}><Trash2 className="size-4" /></IconButton>}
+                      {['needs', 'failed', 'skipped', 'review'].includes(b.status) && <IconButton label={t('Try again')} onClick={() => retry(b)}><RotateCcw className="size-4" /></IconButton>}
+                      {b.status !== 'running' && <IconButton label={t('Remove')} onClick={() => remove(b)}><Trash2 className="size-4" /></IconButton>}
                     </div>
                   </div>
                 ))}

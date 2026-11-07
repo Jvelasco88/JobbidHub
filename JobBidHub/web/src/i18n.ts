@@ -933,6 +933,11 @@ const ROWS: [string, string, string][] = [
   ['AI key', 'AI 키', 'AI 密钥'],
   ['Free quota used up - JobBid uses the other keys until it resets', '무료 할당량 소진 - 초기화될 때까지 다른 키를 사용합니다', '免费额度已用完 - 在重置前 JobBid 会使用其他密钥'],
   ['The profile will be deleted. To also erase all their history (applications, fill reports, auto-bid queue), type ERASE. Leave empty to keep the history.', '프로필이 삭제됩니다. 기록(지원 내역, 작성 보고서, 자동 지원 대기열)까지 모두 지우려면 ERASE를 입력하세요. 비워 두면 기록은 남습니다.', '将删除该档案。如需同时删除其全部记录（申请、填写报告、自动投递队列），请输入 ERASE。留空则保留记录。'],
+  ['This form was filled for you. If you already pressed Submit in that tab, trying again applies twice. Try again anyway?', '이 양식은 이미 작성되었습니다. 그 탭에서 이미 제출했다면 다시 시도하면 두 번 지원됩니다. 그래도 다시 시도할까요?', '此表单已为你填好。如果你已在该标签页中提交，再试一次会重复申请。仍要重试吗？'],
+  ['Submit was already pressed for this job, so it may have been sent. Try again anyway?', '이 공고는 이미 제출 버튼을 눌렀으므로 전송되었을 수 있습니다. 그래도 다시 시도할까요?', '此职位已按过提交，可能已经发送。仍要重试吗？'],
+  ['If this application was sent, log it in Applications first - otherwise a later Start may apply to it again. Remove it?', '이 지원서가 전송되었다면 먼저 지원 내역에 기록하세요. 그렇지 않으면 다음 시작 때 다시 지원할 수 있습니다. 삭제할까요?', '如果此申请已发送，请先在申请记录中登记，否则之后开始时可能再次申请。要删除吗？'],
+  ['Fix the cause (AI keys, proxy, the site), then press Start.', '원인(AI 키, 프록시, 사이트)을 해결한 뒤 시작을 누르세요.', '请先解决原因（AI 密钥、代理或网站），然后点击开始。'],
+  ['Auto bid stopped by itself', '자동 지원이 스스로 멈췄습니다', '自动投递已自行停止'],
 ];
 
 export const DICT: Record<Exclude<Lang, 'en'>, Record<string, string>> = { ko: {}, zh: {} };
