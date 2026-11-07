@@ -97,7 +97,6 @@
     r.querySelector('.go').addEventListener('click', () => location.reload());
     r.querySelector('.x').addEventListener('click', () => host.remove());
     (document.body || document.documentElement).appendChild(host);
-    setTimeout(() => host.remove(), 20000);
   }
 
   const send = (msg) =>
@@ -2866,6 +2865,9 @@
         </div>
       </div>`;
     (document.documentElement || document.body).appendChild(host);
+    // An old copy of JobBid left on the page by an update removes "#jobbid-root" by id: put ours back.
+    new MutationObserver(() => { if (!host.isConnected && !dead && alive()) (document.documentElement || document.body).appendChild(host); })
+      .observe(document.documentElement, { childList: true });
     self.jbI18n?.observe(root);
     const $r = (s) => root.querySelector(s);
     $r('.fill').addEventListener('click', () => fill());

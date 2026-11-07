@@ -653,6 +653,14 @@
       <button class="tab" id="tab" title="Open JobBid panel"><img src="${LOGO}" alt=""><span class="tb" id="tabBadge"></span></button>
     </div>`;
   (document.documentElement || document.body).appendChild(host);
+  // After an update, the old copy of JobBid still on this page (cut off from the extension) removes
+  // "#jobbid-root-panel" by its id when it notices: put this copy's panel back and push the page aside again.
+  new MutationObserver(() => {
+    if (host.isConnected || !api.alive()) return;
+    (document.documentElement || document.body).appendChild(host);
+    pushed = '';
+    render();
+  }).observe(document.documentElement, { childList: true });
   const $ = (id) => root.getElementById(id);
   self.jbI18n?.observe(root);
 

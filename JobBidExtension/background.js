@@ -1624,7 +1624,19 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') openHub('/').catch(() => {});
+  // Chrome does not put an updated extension back into pages that are already open: they would show no
+  // JobBid until reloaded. Add it to them now (no reload, so half-filled forms are kept).
+  if (reason === 'update') setTimeout(() => reinjectOpenTabs().catch(() => {}), 1500);
 });
+
+async function reinjectOpenTabs() {
+  const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+  for (const t of tabs) {
+    if (t.discarded || t.status === 'unloaded') continue; // Chrome loads these fresh, with JobBid
+    const chat = /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//.test(t.url || '');
+    chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: !chat }, files: chat ? ['chatgpt.js'] : ['i18n.js', 'content.js', 'panel.js'] }).catch(() => {});
+  }
+}
 
 // ---------- Work schedule ----------
 // Every minute: when a scheduled block starts, optionally switch the active
