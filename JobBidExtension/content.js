@@ -1554,6 +1554,25 @@
       });
   }
 
+  // Waits until the page stops changing (no new elements or text for `quiet` ms), at most `max` ms.
+  // Used instead of fixed pauses while a list opens or loads: almost all fill time was waiting (measured:
+  // JavaScript work is 10-80 ms of a 1-8 s fill), and a list that is ready after 40 ms is now read then.
+  function settle(max, quiet = 60, min = 0) {
+    const t0 = Date.now();
+    return new Promise((resolve) => {
+      let qt = 0;
+      const done = () => { clearTimeout(qt); clearTimeout(mt); mo.disconnect(); setTimeout(resolve, Math.max(0, min - (Date.now() - t0))); };
+      const mo = new MutationObserver((recs) => {
+        if (recs.every((r) => r.target.closest?.('#jobbid-root, #jobbid-root-panel'))) return; // our own UI
+        clearTimeout(qt);
+        qt = setTimeout(done, quiet);
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+      qt = setTimeout(done, quiet);
+      const mt = setTimeout(done, Math.max(quiet, max));
+    });
+  }
+
   // "Chicago" -> "Chicago, IL, US" rather than "Chicago Lawn, IL, US": the city part equals the answer.
   const sameCityIndex = (texts, value) => {
     const city = norm(String(value).split(',')[0]);
@@ -1590,25 +1609,35 @@
     // A list filtered by typing is not used for that: it may hold only unrelated leftovers.
     const tryPick = async (tries = 1, closest = false) => {
       let opts = [], i = -1, prev = null, loading = false;
-      // A list that is still loading (Greenhouse's Degree / School / Discipline come from its server) gets
-      // up to 7 looks even when only a few were asked for.
-      for (let t = 0; (t < tries || (loading && t < 7)) && i < 0; t++) {
-        await sleep(t ? 450 : 350);
+      // The time it may take: what `tries` fixed looks took before (350 ms, then 450 ms each). A list that is
+      // still loading (Greenhouse's Degree / School / Discipline come from its server) gets up to 3 s.
+      const start = Date.now();
+      let budget = 350 + (tries - 1) * 450;
+      let changedAt = start;
+      for (let t = 0; i < 0; t++) {
+        const left = start + budget - Date.now();
+        if (t && left <= 0) break;
+        await settle(t ? Math.min(450, left) : 350);
         opts = ownOptions();
         const now = opts.map(textOf).join('|');
+        if (now !== prev) changedAt = Date.now();
         // An empty list is "loading" unless the list says it found nothing ("No options", "No results").
         const notice = [...document.querySelectorAll('[class*="menu-notice" i], [class*="no-options" i], [class*="no-results" i], [class*="loading" i]')].filter(isVisible).map(textOf).join(' ');
         loading = /loading|searching|please wait/i.test(notice) || (!opts.length && !/no (options|results|matches)|nothing found|not found/i.test(notice))
           || /loading|searching|please wait|type to search|\.\.\.$|…$/i.test(now);
-        // The same real list twice in a row without the answer: it's done, more waiting won't help.
-        if (!place && !loading && t >= 2 && now === prev) break;
+        // Up to 3 s for a list that says it is loading. Before anything is typed (the first look), an empty list
+        // without such a notice is usually a search box waiting for text: about 1 s, then the typing starts.
+        const saysLoading = /loading|searching|please wait/i.test(notice) || /loading|searching|please wait|\.\.\.$|…$/i.test(now);
+        if (loading) budget = Math.max(budget, closest && !saysLoading ? 700 : 350 + 6 * 450);
+        // The same real list for 0.9 s without the answer: it's done, more waiting won't help.
+        if (!place && !loading && t >= 1 && now === prev && Date.now() - changedAt >= 900) break;
         prev = now;
         // Short fixed lists only: in a long search list (cities) "most similar" would be a wrong place.
         i = closest && opts.length <= 15 ? pickIndex(opts.map(textOf), value) : sameCityIndex(opts.map(textOf), value);
         if (i < 0 && !(closest && opts.length <= 15)) i = bestOption(opts.map(textOf), value);
         if (i < 0 && place) i = placeIndex(opts.map(textOf), value);
         // After typing the city, once the results had a moment to load: the most matching one.
-        if (i < 0 && place && !closest && t >= 2) i = placeClosest(opts.map(textOf), value);
+        if (i < 0 && place && !closest && Date.now() - start >= 1250) i = placeClosest(opts.map(textOf), value);
       }
       if (i < 0) return false;
       opts[i].scrollIntoView({ block: 'nearest' });
@@ -1678,15 +1707,18 @@
     const nearby = () => optionsNear(el);
     const first = norm(String(value).split(/[,(]/)[0]);
     const place = looksLikePlace(value);
-    let seen = false;
-    for (let t = 0; t < 14; t++) {
+    let seen = false, retyped = false, shortened = false;
+    const start = Date.now();
+    // The same steps as before, by time instead of by fixed 350 ms pauses (looks again as soon as the list changes).
+    for (let t = 0; Date.now() - start < 5000; t++) {
+      const ms = Date.now() - start;
       // "Little Falls Township, NJ" finds nothing on many sites: search the city alone ("Little Falls").
-      if (place && t === 5 && el.value !== placeSearch(value)) { setNative(el, placeSearch(value)); el.focus(); }
+      if (place && !shortened && ms >= 2200 && el.value !== placeSearch(value)) { shortened = true; setNative(el, placeSearch(value)); el.focus(); }
       // No list at all yet: the site may search only on real key presses. Type it again, key by key.
-      if (!seen && t === 3) await typeKeys(el, place ? placeSearch(value) : String(el.value || value), true);
-      // No list at all after ~2.5 s (and typing it key by key): this box has no suggestions.
-      if (!seen && t >= 6) return false;
-      await sleep(t ? 350 : 500);
+      if (!seen && !retyped && ms >= 1500) { retyped = true; await typeKeys(el, place ? placeSearch(value) : String(el.value || value), true); }
+      // No list at all after ~2.6 s (and typing it key by key): this box has no suggestions.
+      if (!seen && ms >= 2600) return false;
+      await settle(t ? 350 : 500);
       const opts = nearby();
       if (!opts.length) continue;
       seen = true;
@@ -1695,7 +1727,7 @@
       if (i < 0) i = bestOption(texts, value);
       if (i < 0 && place) i = placeIndex(texts, value);
       if (i < 0) i = texts.findIndex((x) => norm(x).startsWith(first));
-      if (i < 0 && place && (t === 4 || t >= 8)) i = placeClosest(texts, value);
+      if (i < 0 && place && Date.now() - start >= 1900) i = placeClosest(texts, value);
       if (i < 0) continue;
       opts[i].scrollIntoView({ block: 'nearest' });
       for (const type of ['mousedown', 'mouseup', 'click']) opts[i].dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0 }));
@@ -1717,7 +1749,7 @@
   async function pickFromPopup(value, alts = []) {
     let picked = false, prev = '';
     for (let level = 0; level < 3; level++) {
-      await sleep(level ? 450 : 500);
+      await settle(level ? 450 : 500);
       const opts = visibleOptions();
       const texts = opts.map(textOf);
       if (!opts.length || texts.join('|') === prev) return picked;
@@ -2487,7 +2519,7 @@
   async function verifyFilled(done) {
     const problems = [];
     if (!done.length) return problems;
-    await sleep(500);
+    await settle(600, 60, 300); // the site reacts to the answers (some clear a box after checking it with their server)
     const live = done.filter((d) => (d.f.els || [d.f.el]).some((e) => e.isConnected));
     const bad = live.filter((d) => (!hasValue(d.f) || fieldError(d.f)) && !siteGaveUp(d.f));
     if (!bad.length) return problems;
@@ -2501,7 +2533,7 @@
         for (const t of ['change', 'blur', 'focusout']) d.f.el.dispatchEvent(new Event(t, { bubbles: true }));
       }
     }
-    await sleep(600);
+    await settle(700, 60, 300);
     for (const d of bad) {
       const empty = !hasValue(d.f), err = fieldError(d.f);
       if (!empty && !err) continue;
@@ -2586,7 +2618,7 @@
       const seenEls = new Set();
       const queue = [...fields];
       for (let pass = 0; pass < 2; pass++) {
-       if (pass) { await sleep(400); for (const f of collectFields()) if (!seenEls.has(f.el)) queue.push(f); }
+       if (pass) { await settle(400); for (const f of collectFields()) if (!seenEls.has(f.el)) queue.push(f); }
        while (queue.length) {
         const f = queue.shift();
         seenEls.add(f.el);
@@ -3462,11 +3494,11 @@
       const labels = () => formFields().map((f) => f.label).join('|');
       const before = labels();
       await fill({ noApply: true, noAutoSubmit: true });
-      await sleep(500);
+      await settle(500);
       if (labels() !== before) {
         bidStatus('Filling the form', `${at} - new questions appeared`);
         await fill({ noApply: true, noAutoSubmit: true });
-        await sleep(400);
+        await settle(400);
       }
 
       let missing = requiredMissing();
