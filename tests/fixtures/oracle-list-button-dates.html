@@ -1,0 +1,73 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Apply - Oracle list button, start date, full-time</title></head><body>
+<!-- 2026-11-08, from the hub's Problems page:
+     - Oracle Recruiting (cx-select) Country / Title / Degree: "failed" with no choices seen at all. These lists open
+       from their arrow button (<button aria-controls="country-17-listbox" class="icon-dropdown-arrow">); typing
+       into the closed box shows nothing.
+     - Jobvite "Date Available to Start?" (a date box): the saved answer "immediately" could not go in.
+     - "Are you looking for full-time or part-time work?" (Full-Time / Part-Time radios) was left unanswered. -->
+<form onsubmit="return false">
+  <div class="field"><label for="fn">First Name *</label><input id="fn" name="first_name" required></div>
+  <div class="field"><label for="em">Email *</label><input id="em" name="email" type="email" required></div>
+
+  <div class="input-row"><label for="country-17"><span class="input-row__label-text">Country<span aria-hidden="true">*</span></span></label>
+    <div class="input-row__control-container"><div class="cx-select-container"><div class="input-field-container"><div class="input-field-container__left">
+      <input autocomplete="none" name="country" id="country-17" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="grid" aria-controls="country-17-listbox" aria-expanded="false" aria-required="true" class="cx-select-input">
+    </div><div class="input-field-container__right"><button type="button" id="country-17-toggle-button" tabindex="-1" aria-label="Open the drop-down list for Country." aria-controls="country-17-listbox" class="icon-dropdown-arrow">▾</button></div></div></div></div>
+    <span id="country-chosen" hidden></span>
+  </div>
+
+  <div class="field"><label for="start">Date Available to Start?</label><input id="start" type="date"></div>
+  <span id="start-is-today" hidden></span>
+
+  <fieldset><legend>Are you looking for full-time or part-time work? *</legend>
+    <label><input type="radio" name="ft" value="Full-Time" required> Full-Time</label>
+    <label><input type="radio" name="ft" value="Part-Time"> Part-Time</label>
+  </fieldset>
+</form>
+<script>
+  const COUNTRIES = ['Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Argentina', 'Armenia', 'Australia', 'Austria', 'Bahamas',
+    'Canada', 'Mexico', 'Philippines', 'United Kingdom', 'United States', 'United States Minor Outlying Islands', 'Uruguay'];
+  const input = document.getElementById('country-17'), toggle = document.getElementById('country-17-toggle-button');
+  const chosen = document.getElementById('country-chosen');
+  let list = null;
+  const close = () => { list?.remove(); list = null; input.setAttribute('aria-expanded', 'false'); };
+  const choose = (t) => { input.value = t; chosen.textContent = t; close(); };
+  // The list exists only after the arrow button opened it; typing then filters it.
+  const render = () => {
+    if (!list) return;
+    const q = input.value.trim().toLowerCase();
+    list.innerHTML = '';
+    // Long lists show 10 rows at a time, like Oracle's.
+    COUNTRIES.filter((t) => !q || t.toLowerCase().includes(q)).slice(0, 10).forEach((t, i) => {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'row'); li.className = 'cx-select__list-item'; li.id = `country-17-listbox-option-${i}`;
+      li.innerHTML = `<div role="gridcell" class="cx-select__list-item--content">${t}</div>`;
+      li.addEventListener('mousedown', (e) => e.preventDefault());
+      li.addEventListener('click', () => choose(t));
+      list.append(li);
+    });
+  };
+  toggle.addEventListener('click', () => {
+    if (list) return close();
+    list = document.createElement('ul');
+    list.id = 'country-17-listbox'; list.setAttribute('role', 'grid'); list.className = 'cx-select__list';
+    input.closest('.cx-select-container').append(list);
+    input.setAttribute('aria-expanded', 'true');
+    render();
+  });
+  input.addEventListener('input', () => { chosen.textContent = ''; render(); });
+  input.addEventListener('blur', () => setTimeout(() => { if (!chosen.textContent) { input.value = ''; close(); } }, 200));
+
+  const start = document.getElementById('start');
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const mark = () => { document.getElementById('start-is-today').textContent = start.value === today() ? 'today' : `not today: ${start.value}`; };
+  start.addEventListener('input', mark); start.addEventListener('change', mark);
+</script>
+<script type="application/json" id="profile">{ "country": "United States", "customAnswers": { "Date Available to Start?": "immediately" } }</script>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "First Name", "sel": "#fn", "value": "Alex" },
+  { "name": "Oracle Country: list opened from its arrow button, row chosen", "sel": "#country-chosen", "text": "United States" },
+  { "name": "Start date \"immediately\" -> today", "sel": "#start-is-today", "text": "today" },
+  { "name": "Full-time or part-time", "sel": "input[name=ft]", "picked": "Full-Time" }
+] }</script>
+</body></html>

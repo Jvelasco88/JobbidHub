@@ -402,6 +402,9 @@
     { re: /(previously|ever|formerly) (worked|been employed)|former employee|worked (for|at) .{0,30} (before|previously)|been employed (by|with|at) .{0,50}(before|in the past|previously)|worked (for|at) .{0,40}in the past|(currently|presently) (work|working|employed) (at|for|by|with) |in the (past|last) .{0,20}(months?|years?) .{0,30}(worked|been employed|work) (at|for|by|with) /, key: 'workedHereBefore', value: (p) => yn(p.workedHereBefore) || 'No' },
     // "This role requires travel... Are you able and willing to travel as needed?" Default Yes.
     { re: /(able|willing) (and (able|willing) )?to travel|willingness to travel|requires? (some )?travel/, ex: /percent|%|how much|how often/, value: (p) => (p.willingToTravel != null && p.willingToTravel !== '' ? yn(p.willingToTravel) : 'Yes') },
+    // "Are you looking for full-time or part-time work?": full-time (a choice whose text has "full").
+    { re: /full.?time,? or part.?time|part.?time,? or full.?time|full.?time ?\/ ?part.?time|part.?time ?\/ ?full.?time/, ex: /employ(ed|ee)|currently|dedicate|student|intern/,
+      value: (p, f) => (f?.options || []).find((o) => /full/i.test(String(o))) || 'Full-time' },
     { re: /countr(y|ies).{0,40}(want|like|wish|prefer|willing|open|interested|able) to work|(want|like|prefer|willing) to work in|preferred (work )?countr|countries (of|for) work/, ex: /hybrid|remote|on ?site|office|shifts?|weekends?|nights?|hours|environment|team|fast paced|startup/, key: 'workCountries', value: (p) => p.workCountries || p.country },
     // "Which of the following communities do you belong to? (Person with disability, Veteran, Parent...)": None of the above.
     { re: /communit(y|ies) (do )?you (belong|identify)|belong to any of the following (communities|groups)/, value: (p, f) => (f?.options || []).find((o) => /^none( of (the|these) (above|options))?\.?$/i.test(o.trim())) || 'None of the above' },
@@ -540,6 +543,24 @@
     birthday: 'birthday', birthYear: 'birth year',
   };
   const TEXT_KEYS = /^(firstName|lastName|email|phone|linkedin|github|address|zip|city|county|state|country|workCountries|salaryExpectation|noticePeriod|yearsExperience|headline|pronouns)$/;
+  // A value typed into a box is only saved to the profile when it looks like that kind of value: a skill
+  // typed into "Preferred country" on another site became Biniam's "countries to work in".
+  const NOT_PLACE = /\d|@|https?:|www\.|\b(systems?|engineer(ing)?|developer|development|software|learning|data|science|design|analyst|management|python|java|cloud|ai|ml|devops|frontend|backend|full ?stack)\b/i;
+  function plausible(key, v) {
+    const t = String(v || '').trim();
+    switch (key) {
+      case 'email': return /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(t);
+      case 'phone': return !/[a-z]{2}/i.test(t) && t.replace(/\D/g, '').length >= 7;
+      case 'linkedin': return /linkedin\.com\//i.test(t);
+      case 'github': return /github\.com\//i.test(t);
+      case 'zip': return /^[a-z0-9][a-z0-9 -]{2,9}$/i.test(t) && /\d/.test(t);
+      case 'yearsExperience': return /^\d{1,2}(\.\d)?\+?(\s*years?)?$/i.test(t);
+      case 'salaryExpectation': return /\d/.test(t);
+      case 'firstName': case 'lastName': return t.length <= 40 && !/\d|@|https?:/.test(t);
+      case 'city': case 'county': case 'state': case 'country': case 'workCountries': return t.length <= 80 && !NOT_PLACE.test(t);
+      default: return t.length <= 200;
+    }
+  }
   const YESNO_KEYS = ['requiresSponsorship', 'workAuthorization', 'willingToRelocate', 'over18', 'contactCurrent', 'contactPast',
     'everFired', 'essentialFunctions', 'backgroundCheck', 'drugTest', 'convicted', 'nonCompete', 'relatives', 'workedHereBefore', 'conflictOfInterest', 'clearanceEligible'];
   Object.assign(FIELD_NAMES, {
@@ -607,7 +628,7 @@
   }
 
   // Readable question text to store in the profile (matching uses answerKey() normalisation).
-  const cleanQ = (label) => String(label || '').replace(/\(required\)|\(optional\)/gi, '')
+  const cleanQ = (label) => String(label || '').replace(/\(required\)|\(optional\)/gi, '').replace(/^\s*(error|warning|required)\s*:\s*/i, '')
     .replace(/[←-⯿\u{1F000}-\u{1FAFF}️]/gu, ' ') // icons and emoji the site put in the label (⚑, ★, 🚩...)
     .replace(/\s*\*+\s*$/, '').replace(/^\s*\*+\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 200);
 
@@ -1646,8 +1667,23 @@
     const city = norm(String(value).split(',')[0]);
     return city.length < 3 ? -1 : texts.findIndex((x) => norm(String(x).split(',')[0]) === city);
   };
+  // Why a search dropdown was not filled ("the list never opened" / "not among 12 choices"), shown with
+  // the problem on the hub's Problems page.
+  const comboWhy = new WeakMap();
+  // The dropdown's own arrow button: the one that names the same list (Oracle's cx-select:
+  // <button aria-controls="country-17-listbox" class="icon-dropdown-arrow">).
+  function listToggle(el, strict = false) {
+    const id = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+    const root = el.getRootNode();
+    const own = id && [...(root.querySelectorAll ? root.querySelectorAll('button, [role=button]') : [])]
+      .find((b) => b !== el && b.getAttribute('aria-controls') === id);
+    if (own || strict) return own || null;
+    const box = el.closest('[class*="container" i], [class*="control" i]');
+    return box?.querySelector('button[class*="arrow" i], button[class*="toggle" i], button[aria-label^="open" i]') || null;
+  }
   async function comboPick(el, value) {
     if (el.disabled) return false; // locked by the site (see siteGaveUp)
+    let seenMost = 0; // the most choices the list showed
     const control = el.closest('[class*="control" i]') || el.parentElement;
     el.focus();
     for (const type of ['mousedown', 'mouseup']) control.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0 }));
@@ -1687,6 +1723,7 @@
         if (t && left <= 0) break;
         await settle(t ? Math.min(450, left) : 350);
         opts = ownOptions();
+        seenMost = Math.max(seenMost, opts.length);
         const now = opts.map(textOf).join('|');
         if (now !== prev) changedAt = Date.now();
         // An empty list is "loading" unless the list says it found nothing ("No options", "No results").
@@ -1714,6 +1751,14 @@
     };
     const place = looksLikePlace(value);
     let ok = await tryPick(1, true);
+    // Still closed, and it has an arrow button that names its list: open the list with it first (quicker
+    // than typing into a closed box and waiting for choices that never come).
+    const pressToggle = (t) => { for (const type of ['mousedown', 'mouseup', 'click']) t.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0 })); el.focus(); };
+    let toggled = false;
+    if (!ok && !seenMost && !el.disabled) {
+      const own = listToggle(el, true);
+      if (own) { pressToggle(own); toggled = true; ok = await tryPick(1, true); }
+    }
     // Long lists (countries, cities): type the start of the answer to narrow it down, then pick.
     // A place is searched by its city without "Township" ("Little Falls"), which location lists know.
     for (const q of ok ? [] : [...(place ? [placeSearch(value)] : []), ...searchTerms(value)]) {
@@ -1722,6 +1767,21 @@
       typeNoBlur(el, q);
       // Online search lists (cities) need a few seconds; lists that filter what they hold are instant.
       if ((ok = await tryPick(place ? 7 : 3))) break;
+    }
+    // Nothing showed up at all: some lists open only from their arrow button (Oracle's Country, Title,
+    // Degree). Press it, look, then type the answer into the open list.
+    if (!ok && !seenMost && !toggled && !el.disabled) {
+      const toggle = listToggle(el);
+      if (toggle) {
+        typeNoBlur(el, '');
+        pressToggle(toggle);
+        ok = await tryPick(3);
+        for (const q of ok ? [] : searchTerms(value).slice(0, 2)) {
+          if (!q) continue;
+          typeNoBlur(el, q);
+          if ((ok = await tryPick(3))) break;
+        }
+      }
     }
     // Last try with the keyboard: type the answer, the list highlights its match, Enter picks it.
     // Kept only if what is shown afterwards is the answer.
@@ -1736,6 +1796,8 @@
     }
     await sleep(200);
     if (!ok) typeNoBlur(el, '');
+    if (!ok) comboWhy.set(el, seenMost ? `"${String(value).slice(0, 60)}" is not among the ${seenMost} choices the list showed` : 'The list never opened (no choices appeared)');
+    else comboWhy.delete(el);
     // Close this list so it can't get in the way of the next dropdown.
     closeList(el);
     el.blur();
@@ -1833,6 +1895,11 @@
 
   function toDateInput(v) {
     const s = String(v).trim();
+    // "Immediately" / "ASAP" for "Date available to start": today.
+    if (/^(immediately|immediate|asap|as soon as possible|right away|now|today|any ?time)\b/i.test(s)) {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
     // Full dates first (birthday), then the month/year values used by experience dates.
     let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
     if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
@@ -2002,8 +2069,11 @@
           return true;
         }
         case 'date': {
-          const d = toDateInput(value);
+          let d = toDateInput(value);
           if (!d) return false;
+          // A start date saved on an earlier form is in the past by now: today instead.
+          const today = toDateInput('today');
+          if (d < today && /start|availab|join|begin/.test(norm(f.label + ' ' + f.hint))) d = today;
           setNative(f.el, d);
           return true;
         }
@@ -2578,7 +2648,7 @@
       options: (f.options || []).map((o) => String(o ?? '').slice(0, 120)).slice(0, 40),
       value: SENSITIVE.test(text) ? '' : v.slice(0, 300),
       status,
-      error: String(error || applyErrors.get(f.el) || '').slice(0, 300),
+      error: String(error || applyErrors.get(f.el) || (status === 'failed' && comboWhy.get(f.el)) || '').slice(0, 300),
       html: SENSITIVE.test(text) ? '' : snippet(f),
     };
   }
@@ -3306,6 +3376,7 @@
         v = w === 'yes' ? 'Yes' : 'No';
       }
       if (['linkedin', 'github'].includes(rule.key)) v = withHttps(v);
+      if (!YESNO_KEYS.includes(rule.key) && !plausible(rule.key, v)) return; // not that kind of value: not saved anywhere
       const current = String(p[rule.key] ?? '').trim();
       if (norm(current) === norm(v) || withHttps(current) === v) return;
       return offerProfileUpdate(p, rule.key, v, current);
@@ -3416,8 +3487,10 @@
 
   const APPLY_OPEN = /^(apply|apply now|apply here|apply today|apply online|apply for (this )?(job|position|role)|i'?m interested|start (your |my )?application|begin (your )?application)$/i;
   const APPLY_MANUAL = /^(apply manually|apply without (a )?(resume|linkedin|account)|fill (out )?(the )?(application|form) manually)$/i;
+  // Arrows and icons around the words don't count ("APPLY NOW ↗" on Jobright, "→ Apply").
+  const BUTTON_ICONS = /^[\s\u2190-\u2BFF\u{1F000}-\u{1FAFF}\uFE0F]+|[\s\u2190-\u2BFF\u{1F000}-\u{1FAFF}\uFE0F]+$/gu;
   const pageButton = (re) => [...document.querySelectorAll('a, button, [role=button], input[type=button], input[type=submit]')]
-    .find((b) => isVisible(b) && !b.closest('#jobbid-root, #jobbid-root-panel') && re.test((textOf(b) || b.value || b.getAttribute('aria-label') || '').trim()));
+    .find((b) => isVisible(b) && !b.closest('#jobbid-root, #jobbid-root-panel') && re.test((textOf(b) || b.value || b.getAttribute('aria-label') || '').replace(BUTTON_ICONS, '').trim()));
   // A big embedded frame may hold the form (company site with a Greenhouse frame): don't press Apply then.
   const bigFrame = () => [...document.querySelectorAll('iframe')].some((f) => { const r = f.getBoundingClientRect(); return isVisible(f) && r.width > 300 && r.height > 300; });
   // An application window is already open over the page (ZipRecruiter, LinkedIn Easy Apply): even a step
