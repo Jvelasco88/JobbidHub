@@ -348,6 +348,16 @@
   }
 
   // Order matters: specific patterns before general ones.
+  // The choice that agrees ("I understand", "I acknowledge", "I attest", "Continue"); "Yes" when the box has no list.
+  const ACK_OPTION = /^(yes|i (understand|acknowledge|agree|accept|consent|attest|certify|have read)|acknowledged?|agreed?|accept(ed)?|continue|understood)\b/i;
+  const ackOption = (f) => {
+    const opts = (f?.options || []).filter((o) => !/\b(not|don t|do not|decline|disagree)\b/i.test(norm(o)));
+    return opts.find((o) => ACK_OPTION.test(String(o).trim())) || (f?.options?.length ? null : 'Yes');
+  };
+  const COLOR_WORDS = /^(red|blue|green|yellow|orange|purple|pink|black|white|brown|gr[ae]y|violet|indigo|cyan|magenta)$/i;
+  const CURRENCIES = { 'united states': 'USD', usa: 'USD', canada: 'CAD', 'united kingdom': 'GBP', india: 'INR', philippines: 'PHP', australia: 'AUD',
+    mexico: 'MXN', brazil: 'BRL', germany: 'EUR', france: 'EUR', spain: 'EUR', italy: 'EUR', netherlands: 'EUR', ireland: 'EUR', portugal: 'EUR', poland: 'PLN' };
+
   const RULES = [
     // Birthday / age. Split year/month/day fields come first so a field named "dob_month"
     // gets the month, not the whole date. A field naming all three parts (MM/DD/YYYY)
@@ -362,6 +372,31 @@
     // isn't mistaken for "current employer name".
     // "Do you consent to receiving text communications related to your job application via SMS...?": Yes.
     { re: /consent.{0,60}\b(text|sms)\b|\b(text|sms)\b.{0,40}(communications?|messages?|messaging).{0,80}(job|application|recruit)|(receive|receiving) (text|sms)|(receive|receiving) .{0,40}\b(sms|whatsapp)\b|\b(sms|whatsapp)\b.{0,80}(number provided|your application)/, ex: /newsletter|marketing|promotional/, value: () => 'Yes' },
+    // "May we contact you via text about this position?", "Can NinjaOne text you updates?", "Text/SMS": Yes.
+    { re: /(contact|reach|update|message) you (via|by|over|through) (text|sms)|\btext you\b|^(text )?sms\b(?! (marketing|newsletter))|^text messages?\b/, ex: /newsletter|marketing|promotional/, value: () => 'Yes' },
+    // Human check: "To confirm you are a human, which of the following is a real color".
+    { re: /real colou?r|which .{0,40}(is|are) an? colou?r/, value: (p, f) => (f?.options || []).find((o) => COLOR_WORDS.test(String(o).trim())) || null },
+    // Acknowledgements: "I understand that X may use AI tools...", "Candidate Privacy Policy", "AI Usage Attestation",
+    // "By selecting continue ... you acknowledge", "I am allowing X to share my information", interview recording tools.
+    { re: /^i (understand|acknowledge|certify|attest)\b|privacy (policy|notice)|attestation|by selecting .{0,12}continue|you acknowledge|i am allowing|allow .{0,60}to share my (information|data)|records? and transcribes?/,
+      ex: /\b(sms|text messages?|whatsapp|marketing|newsletter)\b/, value: (p, f) => ackOption(f) },
+    // Agreements with a former employer and its secrets: No.
+    { re: /agreement.{0,120}(restrict|limit|prevent|prohibit)|covenants? not to compete|subject to any agreement/, key: 'nonCompete', value: (p) => yn(p.nonCompete) || 'No' },
+    { re: /confidential information.{0,80}(trade secrets?|proprietary)|trade secrets?.{0,80}(previous|former|prior) employ/, value: () => 'No' },
+    // Government work, audits of the company, licenses, family at the company's auditors: No.
+    { re: /government official|government (entity|agency|employee)|employed (with|by) the federal|federal (government|housing)/, ex: /contractor|clearance|security/, value: () => 'No' },
+    { re: /external (accounting )?audit|real estate or broker license|broker license/, value: () => 'No' },
+    { re: /(spouse|domestic partner|dependent|sibling|immediate family).{0,80}(employ|principal|shareholder|work)/, key: 'relatives', value: (p) => yn(p.relatives) || 'No' },
+    // "Are you able to work US East Coast time zone hours?": Yes (not nights / weekends / overtime).
+    { re: /(able|willing) to work .{0,40}(time ?zone|hours)|(east|west) coast .{0,20}hours/, ex: /weekend|night|overtime|on ?call|shift/, value: () => 'Yes' },
+    // "Are you a transitioning service member?": from the veteran answer (not a veteran -> No).
+    { re: /transitioning service ?member/, value: (p) => (/\b(i am a|yes|protected veteran)\b/i.test(p.veteran || '') && !/\bnot\b/i.test(p.veteran || '') ? 'Yes' : 'No') },
+    // "Language" (the application's language, a list holding English): English.
+    { re: /^(preferred |application |correspondence )?language\b(?! (skills?|proficien))/, value: (p, f) => (f?.options || []).find((o) => /^english\b/i.test(String(o).trim())) || null },
+    // "Are you a person of transgender experience?": the profile's answer, else the "prefer not to answer" choice.
+    { re: /transgender|gender identity .{0,20}(same|differ)/, value: (p, f) => p.transgender || (f?.options || []).find((o) => /prefer not|decline|don.?t wish|not to (answer|say|disclose)/i.test(String(o))) || null },
+    // "Salary Expectation - Currency": the profile country's currency.
+    { re: /\bcurrency\b/, value: (p) => CURRENCIES[norm(p.country)] || 'USD' },
     { re: /(18|eighteen) (years|yrs)|at least 18|of legal (working )?age|over the age of 18/, key: 'over18', value: (p) => (p.over18 ? yn(p.over18) : 'Yes') },
     { re: /reliable (transportation|transport|means of transportation)|(own|have) (a )?(reliable )?(car|vehicle)\b/, ex: /license|licence|insurance/, value: () => 'Yes' },
     { re: /contact.{0,40}(current|most recent|present) (employer|supervisor|manager)/, key: 'contactCurrent', value: (p) => yn(p.contactCurrent) },
@@ -428,7 +463,7 @@
     // own work lives on the website or GitHub (a saved answer to the exact question wins, see fill).
     { re: /\b(links?|urls?)\b.{0,40}\b(research|publications?|papers?|projects?|work|samples?|examples?|accomplishments?|contributions?)\b|\b(research|publications?|papers?|projects?|work samples?)\b.{0,30}\b(links?|urls?)\b/, textOk: true,
       value: (p) => withHttps(p.website || p.github || p.linkedin) || null },
-    { re: /phone.*(country|code|ext)|country.*code/, value: () => null },
+    { re: /phone.*(country|code|ext)|country.*code/, value: (p, f) => (f && /^(select|combobox|dropdown|listbox)$/.test(f.kind) && /code/.test(norm(f.label)) && !/ext/.test(norm(f.label)) ? p.country || null : null) },
     // "Phone Device Type" / "Phone Type" (Workday and others): always a mobile number.
     { re: /phone.{0,10}(device|type)|device type|phone kind/, value: () => 'Mobile' },
     { re: /phone|mobile|cell|telephone/, key: 'phone', value: (p) => phoneFor(p) },
@@ -505,9 +540,15 @@
   }
 
   // The box's own complete list (a <select>, radio buttons, Yes/No buttons), without "Select...".
-  const fixedOptions = (f) => (['select', 'radio', 'choice'].includes(f.kind) || (f.kind === 'dropdown' && f.options?.length)
+  const fixedOptions = (f) => (['select', 'radio', 'choice', 'multi'].includes(f.kind) || (f.kind === 'dropdown' && f.options?.length)
     ? (f.options || []).filter((o) => norm(o) && !PLACEHOLDER.test(String(o).trim())) : []);
-  const fitsOptions = (f, v) => { const o = fixedOptions(f); return o.length < 2 || pickWith(o, String(v), altsFor(f)) >= 0; };
+  const fitsOptions = (f, v) => {
+    const o = fixedOptions(f);
+    if (o.length < 2) return true;
+    // Tick boxes ("mark all that apply"): one of the answer's parts is a box.
+    const parts = f.kind === 'multi' ? String(v).split(/\s*(?:,|;|\n)\s*/).filter(Boolean) : [String(v)];
+    return parts.some((x) => pickWith(o, x, altsFor(f)) >= 0);
+  };
 
   // The first rule for the question whose answer is one of the box's options. A word in a long question
   // picks the wrong rule ("...sensitive data, such as gender" -> the gender; "Is current position?" -> the
@@ -635,6 +676,7 @@
 
   // Readable question text to store in the profile (matching uses answerKey() normalisation).
   const cleanQ = (label) => String(label || '').replace(/\(required\)|\(optional\)/gi, '').replace(/^\s*(error|warning|required)\s*:\s*/i, '')
+    .replace(/^\s*select\s+(?=(are|have|has|if|do|does|did|is|was|will|would|can|could|gender|race|ethnicity|veteran|disability|sexual)\b)/i, '')
     .replace(/[←-⯿\u{1F000}-\u{1FAFF}️]/gu, ' ') // icons and emoji the site put in the label (⚑, ★, 🚩...)
     .replace(/\s*\*+\s*$/, '').replace(/^\s*\*+\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 200);
 
@@ -1308,7 +1350,8 @@
   // the chosen option in a separate element next to it. This reads that shown choice.
   function comboShown(el) {
     // Walk up from the text box until the shown choice turns up (stop at the dropdown's own box).
-    const SHOWN = '[class*="single-value" i], [class*="singleValue" i], [class*="selected-value" i], [class*="select-value" i], [class*="multi-value__label" i], [class*="multiValue" i] [class*="label" i]';
+    // ExtJS "boxselect" (Teradata): the choice is a tag <li class="x-boxselect-display-item"><span class="text">Male</span>.
+    const SHOWN = '[class*="single-value" i], [class*="singleValue" i], [class*="selected-value" i], [class*="select-value" i], [class*="multi-value__label" i], [class*="multiValue" i] [class*="label" i], [class*="boxselect-display-item" i] .text';
     let v = null;
     for (let n = el.parentElement, k = 0; n && k < 5 && !v; n = n.parentElement, k++) {
       v = n.querySelector(SHOWN);
@@ -2873,7 +2916,8 @@
       const failedNow = new Set(report.map((x) => x.q));
       for (const f of unresolved) {
         // Essay boxes are left for "Answer with AI" on purpose: not a problem.
-        if (f.required && f.kind !== 'textarea' && !hasValue(f) && !failedNow.has(cleanQ(f.label || f.hint || '').slice(0, 300))) report.push(problemOf(f, 'unanswered', ''));
+        // A one-time code ("Security code" emailed to you) is yours to type: not a problem either.
+        if (f.required && f.kind !== 'textarea' && !isOneTime(f) && !hasValue(f) && !failedNow.has(cleanQ(f.label || f.hint || '').slice(0, 300))) report.push(problemOf(f, 'unanswered', ''));
       }
       sendFillReport(p, job, fields.length, filled, report, { ms: Math.round(performance.now() - started), slow: slow.sort((a, b) => b.ms - a.ms).slice(0, 15) });
 

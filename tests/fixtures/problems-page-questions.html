@@ -1,0 +1,91 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Application - questions from the Problems page</title></head><body>
+<!-- 2026-11-08: real questions from the hub's Problems page. Some got a wrong rule's answer on older versions
+     ("IL" for a government-job question, "T-Mobile" for "is your employer a customer", "Man" for a data-sharing
+     consent); others were left empty though a safe answer exists. Questions that depend on the person (US
+     citizen, commutable distance, "is your employer a customer of X") stay empty for the AI or you.
+     Last: Teradata's ExtJS "boxselect" list shows the choice as a tag (li.x-boxselect-display-item); JobBid
+     chose "Male" but read the box as empty. -->
+<form onsubmit="return false" id="f">
+  <div class="field"><label for="fn">First Name *</label><input id="fn" name="first_name" required></div>
+  <div class="field"><label for="em">Email *</label><input id="em" name="email" type="email" required></div>
+  <div class="field"><label for="sec">Security code *</label><input id="sec" name="security_code" required></div>
+  <div class="field" id="gender-row"><label for="gender-input">Gender:</label>
+    <div class="x-boxselect-input-wrap"><div class="x-boxselect-display-list"><ul class="x-list-plain"></ul></div>
+      <input id="gender-input" type="text" role="combobox" aria-haspopup="listbox" aria-autocomplete="list" aria-controls="boundlist-1" aria-owns="boundlist-1" aria-expanded="false" required></div>
+    <div class="x-form-trigger x-form-arrow-trigger"></div>
+  </div>
+</form>
+<script>
+  const YN = ['Yes', 'No'];
+  // [question, choices, expected]
+  const Q = [
+    ['Within the past 5 years, have you ever been an employee of a state, local, or municipal government entity in the State of Illinois?', YN, 'No'],
+    ['Is your current employer a customer of ServiceNow?', YN, ''],
+    ['Select Are you currently employed or have you ever been employed by PwC?', YN, 'No'],
+    ['Do you reside in the location for this job posting or within commutable distance?', YN, ''],
+    ['Salary Expectation - Currency', ['USD', 'EUR', 'GBP', 'INR'], 'USD'],
+    ['Applying to Staff Software Engineer ML Platform (6244) Shield AI in San Mateo, CA US I am allowing Shield AI to share my information', YN, 'Yes'],
+    ['I understand that Coinbase may use AI tools to assist in the application and interview process.', ['I understand', 'I do not understand'], 'I understand'],
+    ['To confirm you are a human, which of the following is a real color', ['Chair', 'Tuesday', 'Blue', 'Stapler', 'Onion'], 'Blue'],
+    ['May we contact you via text about this position?', YN, 'Yes'],
+    ['Can NinjaOne text you updates about your application?', YN, 'Yes'],
+    ['Text/SMS', YN, 'Yes'],
+    ['Do you have an agreement between you and your current or former employer that may restrict your ability to accept employment?', YN, 'No'],
+    ['Are you a current government official or were you a government official in the last five years?', YN, 'No'],
+    ['Are you able to work US East Coast time zone hours?', YN, 'Yes'],
+    ['To be considered, you must be a US Citizen. Please confirm your current status.', ['I am a US Citizen', 'I am not a US Citizen'], ''],
+    ['Are you comfortable with our recruiting team using BrightHire, a tool that records and transcribes interviews?', YN, 'Yes'],
+    ['Airbnb Candidate Privacy Policy', ['I acknowledge', 'I do not acknowledge'], 'I acknowledge'],
+    ['Candidate AI Usage Attestation:', ['I do not attest', 'I attest'], 'I attest'],
+    ['Are you a transitioning service member?', YN, 'No'],
+    ['Are you subject to any agreement (employment or confidentiality, stock agreements, covenants not to compete, etc.)?', ['No', 'Yes'], 'No'],
+    ['Do you have any confidential information, trade secrets or other proprietary information that you obtained as a result of your previous employment?', ['No', 'Yes'], 'No'],
+    ['Do you intend to actively use a real estate or broker license that you possess?', YN, 'No'],
+    ['Within the preceding three years, did you participate in any manner in an external accounting audit of Freddie Mac?', ['No', 'Yes'], 'No'],
+    ['Is your spouse, domestic partner, dependent, child or sibling a current principal, shareholder or professional employee of an accounting firm?', YN, 'No'],
+    ['Country Phone Code', ['Canada (+1)', 'India (+91)', 'United States (+1)'], 'United States (+1)'],
+    ['Language', ['Spanish', 'English', 'French'], 'English'],
+    ['Are you a person of transgender experience?', ['Yes', 'No', 'I prefer not to answer'], 'I prefer not to answer'],
+    ['By selecting "continue" and submitting your information, you acknowledge that Atlassian may use and retain your information', ['Continue'], 'Continue'],
+  ];
+  const f = document.getElementById('f');
+  Q.forEach(([q, opts], i) => {
+    const d = document.createElement('div'); d.className = 'field';
+    d.innerHTML = `<label for="q${i}">${q} *</label><select id="q${i}" required><option value="">Select...</option>${opts.map((o) => `<option>${o}</option>`).join('')}</select>`;
+    f.append(d);
+  });
+
+  // ExtJS boxselect: the list (ul.x-list-plain in a boundlist) opens on the arrow or typing; a click on an item
+  // adds it as a tag and empties the typing box.
+  const gin = document.getElementById('gender-input'), tags = document.querySelector('#gender-row .x-list-plain');
+  let bl = null;
+  const openList = () => {
+    if (bl) return;
+    bl = document.createElement('div'); bl.id = 'boundlist-1'; bl.className = 'x-boundlist';
+    bl.innerHTML = '<ul class="x-list-plain">' + ['Female', 'Male', 'Decline to answer'].filter((t) => !gin.value || t.toLowerCase().startsWith(gin.value.toLowerCase())).map((t) => `<li role="option" class="x-boundlist-item">${t}</li>`).join('') + '</ul>';
+    bl.querySelectorAll('li').forEach((li) => li.addEventListener('click', () => {
+      tags.innerHTML = `<li class="x-boxselect-display-item"><a href="#" class="close">×</a><span class="text">${li.textContent}</span></li>`;
+      gin.value = ''; bl.remove(); bl = null; gin.setAttribute('aria-expanded', 'false');
+    }));
+    document.getElementById('gender-row').append(bl); gin.setAttribute('aria-expanded', 'true');
+  };
+  document.querySelector('#gender-row .x-form-trigger').addEventListener('click', openList);
+  gin.addEventListener('input', () => { bl?.remove(); bl = null; openList(); });
+  gin.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') openList(); });
+  gin.addEventListener('mousedown', openList);
+
+  addEventListener('DOMContentLoaded', () => {
+    document.getElementById('expect').textContent = JSON.stringify({
+      checks: [
+        { name: 'First Name', sel: '#fn', value: 'Alex' },
+        { name: 'Security code left for you', sel: '#sec', value: '' },
+        { name: 'Teradata Gender tag', sel: '#gender-row .x-boxselect-display-item .text', text: 'Male' },
+        ...Q.map(([q, , want], i) => ({ name: q.slice(0, 80), sel: `#q${i}`, value: want })),
+      ],
+      noProblems: ['Gender:', 'Security code'],
+    });
+  });
+</script>
+<script type="application/json" id="profile">{ "gender": "Male", "currentCompany": "T-Mobile", "state": "IL", "city": "Chicago", "country": "United States", "salaryExpectation": "110,000", "veteran": "I am not a protected veteran" }</script>
+<script type="application/json" id="expect">{}</script>
+</body></html>
