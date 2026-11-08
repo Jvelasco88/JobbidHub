@@ -473,7 +473,7 @@
     // "Location (City)" is a place search (Greenhouse): "Chicago, IL" from the location rule below.
     { re: /\bcity\b|town/, ex: /location/, key: 'city', value: (p) => cityOnly(p) || p.city },
     // County is not the state: empty until the profile has one (typed once on a form, it is saved to the profile).
-    { re: /\bcounty\b/, ex: /country/, key: 'county', value: (p) => p.county || null },
+    { re: /\bcounty\b/, ex: /country/, key: 'county', value: (p) => (notCounty(p.county) ? null : p.county || null) },
     { re: /\bstate\b|province|\bregion\b/, ex: /statement|united states|\bcounty\b/, key: 'state', value: (p) => p.state || stateIn(p.address) || stateIn(p.city) },
     { re: /country/, ex: /phone/, key: 'country', value: (p) => p.country },
     // Where the candidate lives. Not "Which (office) location are you applying for?": that is the job's office.
@@ -543,6 +543,11 @@
     birthday: 'birthday', birthYear: 'birth year',
   };
   const TEXT_KEYS = /^(firstName|lastName|email|phone|linkedin|github|address|zip|city|county|state|country|workCountries|salaryExpectation|noticePeriod|yearsExperience|headline|pronouns)$/;
+  // "United States" or "Virginia" saved as the county: a state or country, not a county.
+  const notCounty = (v) => {
+    const t = norm(v).replace(/\bcounty\b/, '').trim();
+    return !t || /^(united states|usa|us|america|canada|united kingdom)$/.test(t) || !!US_STATES[t] || Object.values(US_STATES).includes(t);
+  };
   // A value typed into a box is only saved to the profile when it looks like that kind of value: a skill
   // typed into "Preferred country" on another site became Biniam's "countries to work in".
   const NOT_PLACE = /\d|@|https?:|www\.|\b(systems?|engineer(ing)?|developer|development|software|learning|data|science|design|analyst|management|python|java|cloud|ai|ml|devops|frontend|backend|full ?stack)\b/i;
@@ -557,7 +562,8 @@
       case 'yearsExperience': return /^\d{1,2}(\.\d)?\+?(\s*years?)?$/i.test(t);
       case 'salaryExpectation': return /\d/.test(t);
       case 'firstName': case 'lastName': return t.length <= 40 && !/\d|@|https?:/.test(t);
-      case 'city': case 'county': case 'state': case 'country': case 'workCountries': return t.length <= 80 && !NOT_PLACE.test(t);
+      case 'county': return t.length <= 80 && !NOT_PLACE.test(t) && !notCounty(t);
+      case 'city': case 'state': case 'country': case 'workCountries': return t.length <= 80 && !NOT_PLACE.test(t);
       default: return t.length <= 200;
     }
   }
@@ -1745,9 +1751,36 @@
         if (i < 0 && place && !closest && Date.now() - start >= 1250) i = placeClosest(opts.map(textOf), value);
       }
       if (i < 0) return false;
-      opts[i].scrollIntoView({ block: 'nearest' });
-      for (const type of ['mousedown', 'mouseup', 'click']) opts[i].dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0 }));
+      await chooseRow(opts[i], i);
       return true;
+    };
+    // Clicked on the row's innermost box (Oracle's cx-select listens on the cell inside the row, and an event
+    // sent to the row never reaches it). If the list is still open with the row in it, the click did not
+    // count: Arrow Down to the row (the box names the highlighted row), then Enter - Oracle takes that too.
+    const chooseRow = async (opt, i) => {
+      opt.scrollIntoView({ block: 'nearest' });
+      let target = opt;
+      while (target.children.length === 1 && textOf(target.children[0]) === textOf(target)) target = target.children[0];
+      const at = target.getBoundingClientRect();
+      const xy = { bubbles: true, cancelable: true, composed: true, button: 0, clientX: at.left + Math.min(10, at.width / 2), clientY: at.top + at.height / 2 };
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        target.dispatchEvent(type.startsWith('pointer') ? new PointerEvent(type, { ...xy, pointerType: 'mouse', isPrimary: true }) : new MouseEvent(type, xy));
+      }
+      await sleep(150);
+      const stillOpen = opt.isConnected && isVisible(opt) && el.getAttribute('aria-expanded') !== 'false';
+      // A box the site locked takes no keys (a person couldn't type there either).
+      const locked = el.disabled || el.closest('[aria-disabled="true"], [class*="is-disabled" i]');
+      if (!stillOpen || locked) return;
+      el.focus();
+      const highlighted = () => opt.id && el.getAttribute('aria-activedescendant') === opt.id;
+      for (let k = 0; k <= i && k < 80 && !highlighted(); k++) {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true, cancelable: true }));
+        await sleep(25);
+      }
+      // The box names its highlighted row, and it is another one: don't press Enter on the wrong answer.
+      if (opt.id && el.getAttribute('aria-activedescendant') && !highlighted()) return;
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+      await sleep(150);
     };
     const place = looksLikePlace(value);
     let ok = await tryPick(1, true);
@@ -2708,6 +2741,20 @@
   // Full auto does not send a form with one of these unless it is an essay box (see runBid).
   const aiTouched = new Map(); // element -> { q, kind }
 
+  // A ZIP / postal code search box that comes after City, State or County boxes goes first: choosing the
+  // ZIP's row ("60623, Chicago, Cook, IL") fills them, and their lists only hold the right places after it
+  // (Oracle lists 500 cities before it, without Chicago).
+  function zipFirst(list) {
+    const geo = (f) => f.kind === 'combobox' && /\b(city|state|county|province|region)\b/.test(norm(f.label));
+    const zip = list.findIndex((f) => f.kind === 'combobox' && /\b(zip|postal|post code|postcode)\b/.test(norm(f.label)));
+    if (zip < 0) return list;
+    const first = list.findIndex(geo);
+    if (first < 0 || first > zip) return list;
+    const [z] = list.splice(zip, 1);
+    list.splice(first, 0, z);
+    return list;
+  }
+
   async function fill({ resumeId, noApply, noAutoSubmit } = {}) {
     if (filling) return;
     // No form yet, only the job's Apply button: press it first.
@@ -2754,7 +2801,7 @@
       // Questions that appear only after an earlier answer (e.g. "race" after "Hispanic: No") are
       // picked up in a second pass.
       const seenEls = new Set();
-      const queue = [...fields];
+      const queue = zipFirst([...fields]);
       for (let pass = 0; pass < 2; pass++) {
        if (pass) { await settle(400); for (const f of collectFields()) if (!seenEls.has(f.el)) queue.push(f); }
        while (queue.length) {

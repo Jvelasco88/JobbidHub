@@ -1,0 +1,82 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Apply - Oracle address (geo hierarchy)</title></head><body>
+<!-- 2026-11-08, eeho.fa.us2.oraclecloud.com (3.9.73): City, State, Postal Code, County and Title all "failed", most
+     with the list open and a row clicked but nothing chosen. Like Oracle's cx-select here:
+     - rows (li role=row) don't listen for clicks; the cell inside does (Title's rows take only Arrow Down + Enter);
+     - the box names the highlighted row (aria-activedescendant);
+     - City comes before Postal Code and lists 500 cities (no Chicago) until a ZIP is chosen; choosing the ZIP
+       row "60623, Chicago, Cook, IL" fills City, State and County. -->
+<form onsubmit="return false">
+  <div class="field"><label for="fn">First Name *</label><input id="fn" name="first_name" required></div>
+  <div class="field"><label for="em">Email *</label><input id="em" name="email" type="email" required></div>
+  <div id="rows"></div>
+</form>
+<script>
+  const chosen = {};
+  function cx(name, label, source, { keysOnly = false, searchOnType = true } = {}) {
+    const id = `${name}-1`;
+    const row = document.createElement('div');
+    row.className = 'input-row input-row--has-picker geo-hierarchy-form-element';
+    row.innerHTML = `<label class="input-row__label" for="${id}"><span class="input-row__label-text">${label} <span aria-hidden="true">*</span></span></label>
+      <div class="input-row__control-container"><div class="cx-select-container"><div class="input-field-container"><div class="input-field-container__left">
+      <input autocomplete="none" name="${name}" id="${id}" type="text" role="combobox" aria-autocomplete="list" aria-haspopup="grid" aria-controls="${id}-listbox" aria-expanded="false" aria-required="true" class="cx-select-input">
+      </div><div class="input-field-container__right"><button type="button" id="${id}-toggle-button" tabindex="-1" aria-label="Open the drop-down list for ${label}." aria-controls="${id}-listbox" class="icon-dropdown-arrow">▾</button></div></div></div></div>
+      <span class="chosen" id="${name}-chosen" hidden></span>`;
+    document.getElementById('rows').append(row);
+    const input = row.querySelector('input'), toggle = row.querySelector('button'), out = row.querySelector('.chosen');
+    let list = null, active = -1, items = [];
+    const set = (t) => { input.value = t; out.textContent = t; chosen[name] = t; };
+    const close = () => { list?.remove(); list = null; active = -1; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); };
+    const choose = (t) => { set(t); close(); onChoose[name]?.(t); };
+    const render = () => {
+      if (!list) { list = document.createElement('ul'); list.id = `${id}-listbox`; list.setAttribute('role', 'grid'); row.querySelector('.cx-select-container').append(list); input.setAttribute('aria-expanded', 'true'); }
+      const q = out.textContent ? '' : input.value.trim().toLowerCase();
+      items = source().filter((t) => !q || t.toLowerCase().includes(q)).slice(0, 500);
+      list.innerHTML = '';
+      items.forEach((t, i) => {
+        const li = document.createElement('li');
+        li.setAttribute('role', 'row'); li.id = `${id}-listbox-row-${i}`;
+        const cell = document.createElement('div');
+        cell.setAttribute('role', 'gridcell'); cell.textContent = t;
+        if (!keysOnly) cell.addEventListener('click', () => choose(t)); // the cell listens, not the row
+        li.addEventListener('mousedown', (e) => e.preventDefault());
+        li.append(cell); list.append(li);
+      });
+    };
+    toggle.addEventListener('click', () => (list ? close() : render()));
+    input.addEventListener('input', () => { out.textContent = ''; chosen[name] = ''; if (list || searchOnType) render(); });
+    input.addEventListener('keydown', (e) => {
+      if (!list) return;
+      if (e.key === 'ArrowDown') { active = Math.min(items.length - 1, active + 1); input.setAttribute('aria-activedescendant', `${id}-listbox-row-${active}`); }
+      if (e.key === 'Enter' && active >= 0) { e.preventDefault(); choose(items[active]); }
+      if (e.key === 'Escape') close();
+    });
+    input.addEventListener('blur', () => setTimeout(() => { if (!out.textContent) { input.value = ''; close(); } }, 200));
+    return { set };
+  }
+  const onChoose = {};
+  // 500 cities, alphabetical, none of them Chicago, until a ZIP is chosen.
+  let cities = Array.from({ length: 500 }, (_, i) => `Acton ${String(i).padStart(3, '0')}`);
+  let states = ['Alabama', 'Alaska', 'Arizona', 'California', 'Illinois', 'Indiana', 'Virginia'];
+  let counties = Array.from({ length: 500 }, (_, i) => `Adams ${String(i).padStart(3, '0')}`);
+  const ZIPS = ['60606, Chicago, Cook, IL', '60623, Chicago, Cook, IL', '20190, Reston, Fairfax, VA'];
+  const title = cx('title', 'Title', () => ['Dr.', 'Miss', 'Mr.', 'Mrs.', 'Ms.'], { keysOnly: true, searchOnType: false });
+  const city = cx('city', 'City', () => cities);
+  const state = cx('region2', 'State', () => states);
+  const zip = cx('postalCode', 'Postal Code', () => ZIPS);
+  const county = cx('region3', 'County', () => counties);
+  onChoose.postalCode = (t) => {
+    const [, c, co, st] = t.split(', ');
+    cities = [c]; counties = [co]; states = [{ IL: 'Illinois', VA: 'Virginia' }[st]];
+    city.set(c); county.set(co); state.set(states[0]);
+  };
+</script>
+<script type="application/json" id="profile">{ "gender": "Male", "city": "Chicago,IL", "state": "IL", "zip": "60623", "county": "United States", "customAnswers": { "Title": "Mr." } }</script>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "First Name", "sel": "#fn", "value": "Alex" },
+  { "name": "Postal Code row chosen", "sel": "#postalCode-chosen", "text": "60623, Chicago, Cook, IL" },
+  { "name": "City (from the ZIP, not a wrong city from the 500)", "sel": "#city-chosen", "text": "Chicago" },
+  { "name": "State", "sel": "#region2-chosen", "text": "Illinois" },
+  { "name": "County is Cook (never \"United States\")", "sel": "#region3-chosen", "text": "Cook" },
+  { "name": "Title chosen with the keyboard", "sel": "#title-chosen", "text": "Mr." }
+] }</script>
+</body></html>

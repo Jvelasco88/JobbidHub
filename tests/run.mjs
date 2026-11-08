@@ -141,6 +141,8 @@ for (const file of files) {
     for (const p of probs) console.log(`      reported as a problem: "${p.q}" (${p.status})`);
     for (const q of unreported) console.log(`      not reported, but it should be: "${q}"`);
     for (const e of errors) console.log(`      page error: ${e}`);
+    // SLOW=1 npm test: where the fill time went (the boxes over 1.5 s, as sent to the hub).
+    if (process.env.SLOW) for (const s of reports[0]?.slow || []) console.log(`      slow: ${s.q || s.label} ${s.ms} ms`);
   } catch (e) {
     failed++;
     console.log(`FAIL  ${file}  ${e.message}`);
