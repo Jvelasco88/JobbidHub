@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Job Application - one-choice acknowledgement</title></head><body>
+<!-- 2026-11-09: a required dropdown whose only choice is "I acknowledge". Its choices are unknown until the list
+     opens, so the acknowledgement rule asks for "Yes", and "I acknowledge" was not taken as a yes. Also a plain
+     select with one real choice and no rule for its question: the only choice is chosen. -->
+<form id="application-form" onsubmit="return false">
+  <div class="text-input-wrapper"><label for="first_name">First Name<span aria-hidden="true">*</span></label><input id="first_name" aria-required="true" type="text"></div>
+  <div class="select" data-id="ack" data-label='By clicking "I acknowledge," you agree to our Privacy Policy and data processing. Providing accurate information is essential, as any dishonesty may lead to rejection of an application or termination.' data-options="I acknowledge" data-required></div>
+  <div class="field"><label for="one">Please confirm the hiring process timeline has been explained *</label><select id="one" required><option value="">Select...</option><option>Confirmed</option></select></div>
+</form>
+<script src="react-select.js"></script>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "First Name", "sel": "#first_name", "value": "Alex" },
+  { "name": "Only choice I acknowledge", "sel": "[data-id=ack] .select__single-value", "text": "I acknowledge" },
+  { "name": "Select with one real choice", "sel": "#one", "value": "Confirmed" }
+] }</script>
+</body></html>

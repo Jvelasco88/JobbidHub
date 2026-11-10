@@ -1598,7 +1598,7 @@
     // takes "I am not a Veteran." The options that start with the "no" come first.
     const startsNo = (t) => /^(no|not|none|i am not|i m not|i do not|i don t|i have not|i haven t|i was not|negative|false)\b/.test(t);
     const polarity = (t) => startsNo(t) || (/\bnot a protected\b/.test(t) && !/identify as (a|one)|^i am a\b/.test(t)) ? 'no'
-      : /^(yes|i am|i m|i have|i do|i identify|i was|true|positive|i agree|i consent|i accept)\b/.test(t) ? 'yes' : '';
+      : /^(yes|i am|i m|i have|i do|i identify|i was|true|positive|i agree|i consent|i accept|i acknowledge|i understand|i attest|i certify|i confirm|acknowledged?|confirmed?|agreed?|accepted)\b/.test(t) ? 'yes' : '';
     const pv = polarity(v);
     if (pv) {
       i = ns.findIndex((o) => o === pv || o.split(' ')[0] === pv);
@@ -2894,6 +2894,11 @@
         if (f.kind === 'textarea' && typeof v === 'string' && letterLike(v)) v = '';
         // The user's own template ("Why {company}?") with this job's company filled in.
         if (v == null || v === '') v = templateFor(f, p, job);
+        // A required list with one real choice ("I acknowledge", "Confirmed"): the only possible answer.
+        if ((v == null || v === '') && f.required && f.kind === 'select') {
+          const real = (f.options || []).filter((o) => norm(o) && !PLACEHOLDER.test(String(o).trim()));
+          if (real.length === 1) v = real[0];
+        }
         const t0 = performance.now();
         const ok = v != null && v !== '' && (await apply(f, v));
         const ms = Math.round(performance.now() - t0);

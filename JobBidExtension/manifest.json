@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JobBid Autofill",
-  "version": "3.9.76",
+  "version": "3.9.77",
   "description": "Autofill job applications on any site from saved candidate profiles, AI answers, a work schedule and an application tracker.",
   "icons": {
     "16": "icons/icon16.png",
