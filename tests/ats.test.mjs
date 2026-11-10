@@ -212,6 +212,35 @@ const none = ATS.validateAnalysis({ requirements: [{ term: 'Rust' }, { term: 'Ha
 check('terms not in the posting: counted, named', none.requirements.length === 0 && none.received === 2 && none.droppedTerms.includes('Rust'));
 check('no list at all: received 0', ATS.validateAnalysis({ answer: 'sorry' }, JOB_ML).received === 0);
 
+section('Job title and industry (a chip-design AI role, like a real NVIDIA posting)');
+const JOB_CHIP = { title: 'Senior AI Systems Engineer, Chip Design', company: 'Chipco', url: 'https://jobs.example.com/4', description: `
+Chipco is the leader in accelerated computing for the semiconductor and hardware industry. We apply artificial intelligence to chip design.
+What you need: 6+ years of experience. Python, PyTorch, machine learning, reinforcement learning, VLSI design. Large language models and AI agents a plus.` };
+const AI_CHIP = { titleAliases: ['AI Engineer', 'Machine Learning Engineer'], yearsRequired: 6,
+  industries: [{ term: 'Semiconductor' }, { term: 'Hardware' }, { term: 'Artificial Intelligence (AI)' }, { term: 'Gaming' }],
+  requirements: [{ term: 'Python', importance: 'required' }, { term: 'PyTorch', importance: 'required' }, { term: 'Machine Learning', importance: 'required' },
+    { term: 'Reinforcement Learning', importance: 'required' }, { term: 'VLSI Design', importance: 'required' }, { term: 'Large Language Models', aliases: ['LLMs'], importance: 'preferred' }] };
+const aChip = ATS.validateAnalysis(AI_CHIP, JOB_CHIP);
+const indTerms = aChip.requirements.filter((r) => r.category === 'domain').map((r) => r.term);
+check('industries the posting names are kept', ['Semiconductor', 'Hardware', 'Artificial Intelligence'].every((t) => indTerms.includes(t)), indTerms.join(', '));
+check('an industry the posting never names is dropped (Gaming)', !indTerms.includes('Gaming'));
+const chipResume = [{ name: true, text: 'Sam Doe' }, { text: 'Senior Software Engineer / AI Engineer' }, { text: 'sam@example.com · 555-010-4000' },
+  { h: true, text: 'Experience' }, { tab: ['Senior Software Engineer, Ad Co', 'Jan 2016 - Present'] },
+  { li: true, text: 'Built machine learning services in Python and LLMs for artificial intelligence products.' },
+  { h: true, text: 'Skills' }, { text: 'Python, PyTorch, Kubernetes' }, { h: true, text: 'Education' }, { text: 'B.S. Computer Science' }];
+const chipModel = ATS.buildModel((await rdOpen(fileOf(makeDocx(chipResume), 'c.docx', DOCX))).lines, {});
+const rChip = ATS.score(chipModel, aChip);
+const tChip = rChip.components.find((c) => c.key === 'title');
+check('a title the AI only called similar ("AI Engineer") gets at most 70%', tChip.points <= tChip.max * 0.7 + 0.05, `${tChip.points}/${tChip.max}`);
+const exactResume = chipResume.map((p) => (p.text === 'Senior Software Engineer / AI Engineer' ? { text: 'Senior AI Systems Engineer, Chip Design' } : p));
+const exactDoc = await rdOpen(fileOf(makeDocx(exactResume), 'c.docx', DOCX));
+const exact = ATS.score(ATS.buildModel(exactDoc.lines, {}), aChip);
+check('the job\'s own title gets full points', exact.components.find((c) => c.key === 'title').points >= exact.components.find((c) => c.key === 'title').max - 0.1);
+const iChip = rChip.components.find((c) => c.key === 'industry');
+check('industry part: AI shown, Semiconductor and Hardware missing', iChip && iChip.points < iChip.max * 0.5 && iChip.deductions.some((d) => /Semiconductor/.test(d.text)) && iChip.deductions.some((d) => /Hardware/.test(d.text)),
+  iChip && `${iChip.points}/${iChip.max} ${iChip.deductions.map((d) => d.text).join(' | ')}`);
+check('industry terms are not counted twice (not in keyword coverage)', !rChip.components.find((c) => c.key === 'keywords').deductions.some((d) => /Semiconductor/.test(d.text)));
+
 section('More checks');
 check('PDF: the title line is found even when it runs into the contact line', pRep.components.find((c) => c.key === 'title').points >= rML.components.find((c) => c.key === 'title').points - 0.5,
   `${pRep.components.find((c) => c.key === 'title').points}`);

@@ -248,7 +248,7 @@
   }
   function weightsHtml() {
     const w = st.weights || st.res.report.weights;
-    const labels = { keywords: 'Keyword coverage', demonstrated: 'Skills shown in experience', responsibilities: 'Relevant experience', title: 'Job title alignment', years: 'Years of experience', qualifications: 'Education & certifications', readability: 'ATS readability' };
+    const labels = { keywords: 'Keyword coverage', demonstrated: 'Skills shown in experience', responsibilities: 'Relevant experience', industry: 'Industry experience', title: 'Job title alignment', years: 'Years of experience', qualifications: 'Education & certifications', readability: 'ATS readability' };
     return `<div class="t3" style="margin:6px 0">Relative weights (parts the job doesn't ask about are left out and the rest scaled to 100). Saved on this computer.</div>
       <table>${Object.keys(labels).map((k) => `<tr><td>${labels[k]}</td><td><input type="number" min="0" max="100" step="1" data-w="${k}" value="${esc(w[k] ?? 0)}"></td></tr>`).join('')}</table>
       <div style="margin-top:8px;display:flex;gap:10px"><button class="link" data-act="saveWeights">Save and re-score</button><button class="link" data-act="resetWeights">Reset to defaults</button></div>`;

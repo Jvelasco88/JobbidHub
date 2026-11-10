@@ -4,17 +4,19 @@
 // Works in the service worker (importScripts) and in Node (tests): everything is on self.JobBidATS.
 
 (function (root) {
-  const VERSION = 1;
+  // 2: the job's industries are read too (a job read with version 1 is read again).
+  const VERSION = 2;
   // Points out of 100 for each part of the score (configurable: chrome.storage.local "atsWeights").
   // A part the job doesn't ask about (no degree, no years) is left out and the others are scaled up.
-  const DEFAULT_WEIGHTS = { keywords: 40, demonstrated: 15, responsibilities: 10, title: 10, years: 10, qualifications: 7, readability: 8 };
+  const DEFAULT_WEIGHTS = { keywords: 35, demonstrated: 15, responsibilities: 10, industry: 10, title: 10, years: 8, qualifications: 6, readability: 6 };
   const WEIGHT_LABELS = {
-    keywords: 'Keyword coverage', demonstrated: 'Skills shown in experience', responsibilities: 'Relevant experience',
+    keywords: 'Keyword coverage', demonstrated: 'Skills shown in experience', responsibilities: 'Relevant experience', industry: 'Industry experience',
     title: 'Job title alignment', years: 'Years of experience', qualifications: 'Education & certifications', readability: 'ATS readability',
   };
   const IMPORTANCE = { required: 3, preferred: 1.5, optional: 0.75 };
   const CATEGORIES = ['skill', 'tool', 'domain', 'responsibility', 'qualification', 'certification', 'soft'];
-  const KEYWORD_CATS = new Set(['skill', 'tool', 'domain', 'soft']);
+  // Industry terms ('domain') have their own part of the score.
+  const KEYWORD_CATS = new Set(['skill', 'tool', 'soft']);
 
   // ---------- Words ----------
 
@@ -128,6 +130,7 @@
     return `You are an ATS (applicant tracking system) configuration expert. Read this job posting and list what a resume is screened for.
 Return ONLY JSON:
 {"titleAliases": ["other titles for the same role"],
+ "industries": [{"term": "industry or business area of this job and company, as the posting words it", "related": ["neighbouring industries"]}],
  "yearsRequired": number or null,
  "degree": {"level": "associate|bachelor|master|phd|", "fields": ["field of study"], "required": true|false},
  "requirements": [{"term": "exact wording from the posting", "aliases": ["abbreviations and exact equivalents"], "related": ["related but different skills"],
@@ -139,6 +142,7 @@ Rules:
 - "related" are neighbouring skills that show something but are not the same ("TensorFlow" for "PyTorch").
 - "importance": required = must-have / minimum qualification / core of the role; preferred = nice to have / bonus / preferred; optional = mentioned in passing.
 - "domain" = industry or business area terms (e.g. "Healthcare", "Claims"); "responsibility" = a short phrase for a main duty (e.g. "deploy models to production"); "certification" = a named certificate or license.
+- "industries": 2 to 8 industries / business areas the posting names for this role or company (e.g. "Semiconductor", "Hardware", "Healthcare", "Fintech"), only ones its text names.
 - Leave out benefits, company boilerplate, location, salary, equal-opportunity text.
 
 JOB TITLE: ${job.title || ''}
@@ -250,6 +254,16 @@ ${clean(job.description).slice(0, 9000)}`;
       dropped++;
       droppedTerms.push(term);
     }
+    // The job's industries: requirements of their own kind, kept only when the posting names them.
+    for (const raw0 of (Array.isArray(src.industries) ? src.industries : typeof src.industries === 'string' ? src.industries.split(/\s*[,;]\s*/) : []).slice(0, 10)) {
+      const raw = typeof raw0 === 'string' ? { term: raw0 } : raw0;
+      const term = clean(raw?.term || raw?.name || raw?.industry);
+      if (!term || term.length > 60) continue;
+      const paren = term.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+      const t = paren ? paren[1].trim() : term, aliases = paren ? [paren[2].trim()] : [];
+      if ([t, ...aliases].some(inJd) || nearJd(t)) add({ term: t, aliases, related: strs(raw?.related, 6, 40), category: 'domain', importance: normImportance(raw?.importance || 'preferred') });
+      else droppedTerms.push(t);
+    }
     const order = { required: 0, preferred: 1, optional: 2 };
     reqs.sort((a, b) => order[a.importance] - order[b.importance]);
     const requirements = reqs.slice(0, 45).map(prepReq);
@@ -353,20 +367,22 @@ ${clean(job.description).slice(0, 9000)}`;
   const TITLE_STOP = new Set(['senior', 'sr', 'junior', 'jr', 'staff', 'lead', 'principal', 'head', 'of', 'and', 'the', 'i', 'ii', 'iii', 'iv', 'a', 'an', 'to', 'for', 'in', 'remote', 'hybrid', 'mid', 'level', 'associate', 'contract', 'contractor', 'w2', 'us', 'usa', 'onsite', 'on', 'site']);
   const TITLE_SAME = { developer: 'engineer', programmer: 'engineer', swe: 'engineer', sde: 'engineer', ml: 'machine', ai: 'machine', fullstack: 'full', frontend: 'front', backend: 'back', scientist: 'scientist' };
   const titleWords = (s) => new Set(tokens(s).filter((w) => !TITLE_STOP.has(w)).map((w) => TITLE_SAME[w] || stem(w)));
+  // The job's own title counts in full; a title the AI called the same role only counts 70% (a recruiter's
+  // ATS searches the posting's title, not its look-alikes).
   function titleMatch(model, analysis) {
-    const wants = [analysis.title, ...(analysis.titleAliases || [])].map(titleWords).filter((w) => w.size);
+    const wants = [{ w: titleWords(analysis.title), f: 1 }, ...(analysis.titleAliases || []).map((t) => ({ w: titleWords(t), f: 0.7 }))].filter((x) => x.w.size);
     if (!wants.length) return null;
     const cands = model.lines.filter((l) => (l.zone === 'header' && l.text.length < 160) || ((l.zone === 'experience' || l.zone === 'summary') && l.kind !== 'bullet' && l.text.length < 100));
     let best = 0, line = '';
     for (const c of cands) {
       // Each piece of "Senior Engineer | AI Engineer · name@x.com" and the whole line.
       const pieces = c.text.replace(EMAIL_RE, ' | ').split(/\s[|·•]\s|[|·•]|,\s| - | – | at /).map((x) => x.trim()).filter((x) => x.length > 2 && x.length < 70);
-      for (const want of wants) {
+      for (const { w: want, f } of wants) {
         for (const ww of [...pieces.map(titleWords), titleWords(c.text)]) {
           if (!ww.size) continue;
           const common = [...want].filter((x) => ww.has(x)).length;
           // How much of the job's title the line covers (a long line with the title in it still counts).
-          const s = Math.max((2 * common) / (want.size + Math.min(ww.size, want.size + 2)), common / want.size * 0.9);
+          const s = f * Math.max((2 * common) / (want.size + Math.min(ww.size, want.size + 2)), common / want.size * 0.9);
           if (s > best) { best = s; line = c.text; }
         }
       }
@@ -443,6 +459,13 @@ ${clean(job.description).slice(0, 9000)}`;
       comps.push({ key: 'responsibilities', credit: resp.reduce((s, x) => s + x.weight * credit[x.status], 0) / W,
         deductions: resp.filter((x) => x.status !== 'matched').map((x) => ({ lost: (x.weight * (1 - credit[x.status])) / W, text: `${x.status === 'partial' ? 'Partly shown' : 'Not shown'}: "${x.term}"` })),
         detail: `${resp.filter((x) => x.status === 'matched').length} of ${resp.length} main duties shown in experience` });
+    }
+    const ind = rows.filter((x) => x.category === 'domain');
+    if (ind.length) {
+      const W = sumW(ind);
+      comps.push({ key: 'industry', credit: ind.reduce((s, x) => s + x.weight * credit[x.status], 0) / W,
+        deductions: ind.filter((x) => x.status !== 'matched').map((x) => ({ lost: (x.weight * (1 - credit[x.status])) / W, text: x.status === 'partial' ? `"${x.term}" industry only partly shown${x.via ? ` (the resume has "${x.via}")` : ''}` : `No "${x.term}" industry experience in the resume` })),
+        detail: `${ind.filter((x) => x.status === 'matched').length} of ${ind.length} of the job's industries in the resume` });
     }
     const title = titleMatch(model, analysis);
     if (title) {
