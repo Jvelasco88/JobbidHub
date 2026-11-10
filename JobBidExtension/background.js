@@ -836,9 +836,27 @@ async function atsJobAnalysis(job, { force = false, cachedOnly = false, prog = n
   prog?.start(step, 'The AI reads the posting');
   aiStage('Reading the job\'s requirements...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
   try {
-    const out = await ai(JobBidATS.analysisPrompt(job), { temperature: 0.1, timeoutMs: 150000, accept: (v) => Array.isArray(v?.requirements) });
-    const a = JobBidATS.validateAnalysis(out, job);
-    if (a.requirements.length < 3) throw new Error(`The AI found only ${a.requirements.length} requirement${a.requirements.length === 1 ? '' : 's'} it could show in the posting. Try again.`);
+    const accept = (v) => JobBidATS.requirementList(v).length > 0;
+    const prompt = JobBidATS.analysisPrompt(job);
+    let out = await ai(prompt, { temperature: 0.1, timeoutMs: 150000, accept });
+    let a = JobBidATS.validateAnalysis(out, job);
+    // Too few usable: once more, reminding the AI of the format and to use the posting's own words.
+    if (a.requirements.length < 3) {
+      prog?.start(step, `Only ${a.requirements.length} usable requirement${a.requirements.length === 1 ? '' : 's'}: asking the AI again`);
+      const out2 = await ai(prompt + `
+
+IMPORTANT: your last answer gave ${a.received ? `${a.received} items, but ${a.dropped} of them do not appear in the posting` : 'no "requirements" list'}. Reply with exactly {"requirements":[{"term":"...","aliases":[],"related":[],"category":"skill","importance":"required"}], "titleAliases":[], "yearsRequired":null, "degree":null}, and copy each "term" word for word from the posting text above.`,
+        { temperature: 0.1, timeoutMs: 150000, accept }).catch(() => null);
+      const a2 = out2 && JobBidATS.validateAnalysis(out2, job);
+      if (a2 && a2.requirements.length > a.requirements.length) { a = a2; out = out2; }
+    }
+    if (a.requirements.length < 3) {
+      // Kept on this computer only, to see what the AI answered.
+      await chrome.storage.local.set({ atsLastRaw: { at: new Date().toISOString(), job: job.title, url: job.url, descriptionStart: String(job.description).slice(0, 400), raw: JSON.stringify(out ?? null).slice(0, 20000) } });
+      throw new Error(!a.received
+        ? `The AI's answer had no list of requirements${out ? ` (it answered: ${JSON.stringify(out).slice(0, 120)})` : ''}. Try again, or try another AI key.`
+        : `The AI listed ${a.received} requirements, but ${a.dropped} are not in the job text JobBid read from this page${a.droppedTerms.length ? ` (e.g. ${a.droppedTerms.slice(0, 3).map((t) => `"${t}"`).join(', ')})` : ''}. This page may not show the full job description: open the job's own posting page and try again.`);
+    }
     atsJobs[key] = a;
     for (const k of Object.keys(atsJobs).sort((x, y) => (atsJobs[y].at || '').localeCompare(atsJobs[x].at || '')).slice(40)) delete atsJobs[k];
     await chrome.storage.local.set({ atsJobs });

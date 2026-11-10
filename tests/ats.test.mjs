@@ -193,6 +193,25 @@ check('PDF rebuild: a long resume flows onto more pages', longOut.meta.pages >= 
 const twoCol = await rdOpen(fileOf(await makePdf(Array.from({ length: 12 }, (_, i) => ({ text: `Left column sentence number ${i} about work`, right: `Right column sentence number ${i} about skills` })), { columns: true }), 'c.pdf', 'application/pdf'));
 check('PDF: two columns are a formatting warning', ATS.score(ATS.buildModel(twoCol.lines, twoCol.meta), aML).warnings.some((w) => /column/i.test(w)));
 
+section('The AI answers in other shapes and wordings');
+const terms = (out) => ATS.validateAnalysis(out, JOB_ML).requirements.map((r) => r.term);
+check('a bare list of strings', terms(['Python', 'PyTorch', 'Kubernetes']).length === 3);
+check('another key name ("keywords") with "name"', terms({ keywords: [{ name: 'Python' }, { name: 'Docker' }, { name: 'MLOps' }] }).length === 3);
+check('wrapped in another object', terms({ analysis: { requirements: [{ term: 'Python' }, { term: 'Docker' }, { term: 'Snowflake' }] } }).length === 3);
+const grouped = ATS.validateAnalysis({ required: ['Python', 'PyTorch'], nice_to_have: [{ skill: 'Snowflake' }] }, JOB_ML).requirements;
+check('grouped by importance', grouped.length === 3 && grouped.find((r) => r.term === 'Snowflake').importance === 'preferred' && grouped.find((r) => r.term === 'Python').importance === 'required');
+const paren = ATS.validateAnalysis({ requirements: [{ term: 'SageMaker (AWS SageMaker)' }, { term: 'K8s (Kubernetes)' }] }, JOB_ML).requirements;
+check('"K8s (Kubernetes)": found through the name in brackets', paren.some((r) => r.term === 'K8s' && r.aliases.includes('Kubernetes')) && paren.length === 2);
+check('"Kubernetes/Docker": each part its own requirement', terms({ requirements: [{ term: 'Kubernetes/Docker' }] }).join('|') === 'Kubernetes|Docker');
+check('"Kubernetes or Helm": only the part the posting names', terms({ requirements: [{ term: 'Kubernetes or Helm' }] }).join('|') === 'Kubernetes');
+check('a reworded multi-word term close to the posting is kept', terms({ requirements: [{ term: 'predictive modeling for healthcare' }] }).length === 1);
+const syn = ATS.validateAnalysis({ requirements: [{ term: 'Python', category: 'Programming Language', importance: 'Must-have' }, { term: 'MLOps', type: 'Technical Skill', priority: 'nice to have' }] }, JOB_ML).requirements;
+check('category and importance written other ways', syn[0].category === 'tool' && syn[0].importance === 'required' && syn[1].importance === 'preferred');
+check('aliases as one string', ATS.validateAnalysis({ requirements: [{ term: 'Machine Learning', aliases: 'ML, machine-learning' }] }, JOB_ML).requirements[0].aliases.includes('ML'));
+const none = ATS.validateAnalysis({ requirements: [{ term: 'Rust' }, { term: 'Haskell' }] }, JOB_ML);
+check('terms not in the posting: counted, named', none.requirements.length === 0 && none.received === 2 && none.droppedTerms.includes('Rust'));
+check('no list at all: received 0', ATS.validateAnalysis({ answer: 'sorry' }, JOB_ML).received === 0);
+
 section('More checks');
 check('PDF: the title line is found even when it runs into the contact line', pRep.components.find((c) => c.key === 'title').points >= rML.components.find((c) => c.key === 'title').points - 0.5,
   `${pRep.components.find((c) => c.key === 'title').points}`);

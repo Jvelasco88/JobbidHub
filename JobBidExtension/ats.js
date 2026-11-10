@@ -166,34 +166,89 @@ ${clean(job.description).slice(0, 9000)}`;
 
   // The AI's list, kept only where the posting really says it: every term (or one of its exact equivalents)
   // must be in the job text, so a requirement can't be invented. Duplicates are merged.
+  // The requirement list in whatever shape the AI wrote it: {"requirements": [...]}, a bare list, another key
+  // name ("keywords", "skills"), wrapped ({"analysis": {...}}), grouped by importance ({"required": [...]}),
+  // items as plain strings.
+  const IMP_KEYS = { required: 'required', must_have: 'required', musthave: 'required', mandatory: 'required', minimum: 'required', basic: 'required',
+    preferred: 'preferred', nice_to_have: 'preferred', nicetohave: 'preferred', bonus: 'preferred', plus: 'preferred', optional: 'optional' };
+  function requirementList(out, depth = 0) {
+    if (Array.isArray(out)) return out;
+    if (!out || typeof out !== 'object' || depth > 3) return [];
+    for (const k of ['requirements', 'keywords', 'skills', 'items', 'job_requirements', 'jobRequirements', 'requirement_list', 'list']) if (Array.isArray(out[k]) && out[k].length) return out[k];
+    const grouped = [];
+    for (const [k, v] of Object.entries(out)) {
+      const imp = IMP_KEYS[k.toLowerCase().replace(/[\s-]+/g, '_')] || IMP_KEYS[k.toLowerCase().replace(/[\s_-]+/g, '')];
+      if (imp && Array.isArray(v)) grouped.push(...v.map((x) => (typeof x === 'string' ? { term: x, importance: imp } : x && typeof x === 'object' ? { importance: imp, ...x } : null)).filter(Boolean));
+    }
+    if (grouped.length) return grouped;
+    for (const v of Object.values(out)) { if (v && typeof v === 'object') { const r = requirementList(v, depth + 1); if (r.length) return r; } }
+    return [];
+  }
+  const word = (v) => String(v || '').toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+  const normImportance = (v) => {
+    const t = word(v);
+    if (/required|must|mandatory|minimum|basic|core|essential|critical|high/.test(t)) return 'required';
+    if (/optional|passing|low|mention/.test(t)) return 'optional';
+    return 'preferred';
+  };
+  const normCategory = (v) => {
+    const t = word(v);
+    if (CATEGORIES.includes(t)) return t;
+    if (/soft|communication|interpersonal/.test(t)) return 'soft';
+    if (/certif|licen/.test(t)) return 'certification';
+    if (/educat|degree|qualif/.test(t)) return 'qualification';
+    if (/responsib|duty|duties|task|experience area/.test(t)) return 'responsibility';
+    if (/industr|domain|business/.test(t)) return 'domain';
+    if (/tool|technolog|platform|framework|library|software|language|cloud|database/.test(t)) return 'tool';
+    return 'skill';
+  };
+
   function validateAnalysis(out, job) {
-    const src = out && typeof out === 'object' ? out : {};
+    const src = out && typeof out === 'object' && !Array.isArray(out) ? out : {};
     const jdStems = stems(`${job.title || ''}\n${job.description || ''}`);
-    const jdSentences = String(job.description || '').split(/[\n.;•]+/).map(stems).filter((s) => s.length >= 3);
-    const strs = (v, n, max = 60) => (Array.isArray(v) ? v : []).map((x) => clean(x)).filter((x) => x.length >= 1 && x.length <= max).slice(0, n);
+    const jdSentences = String(job.description || '').split(/[\n.;•]+|\s[-–]\s/).map(stems).filter((s) => s.length >= 3);
+    const strs = (v, n, max = 60) => (Array.isArray(v) ? v : typeof v === 'string' ? v.split(/\s*[,;]\s*/) : []).map((x) => clean(x)).filter((x) => x.length >= 1 && x.length <= max).slice(0, n);
+    const inJd = (t) => { const f = stems(t); return f.length > 0 && phraseAt(jdStems, f) >= 0; };
+    // Most of a multi-word term's words in one sentence of the posting ("statistical modeling techniques").
+    const nearJd = (t) => { const c = [...new Set(stems(t).filter((w) => !STOP.has(w)))]; return c.length >= 2 && jdSentences.some((s) => c.filter((w) => s.includes(w)).length / c.length >= 0.75); };
     const reqs = [];
+    const list = requirementList(out);
     let dropped = 0;
-    for (const raw of Array.isArray(src.requirements) ? src.requirements : []) {
+    const droppedTerms = [];
+    const add = (r) => {
+      const key = stems(r.term).join(' ');
+      const same = reqs.find((x) => [x.term, ...x.aliases].some((t) => stems(t).join(' ') === key) || [r.term, ...r.aliases].some((t) => stems(t).join(' ') === stems(x.term).join(' ')));
+      if (!same) return reqs.push(r);
+      if (IMPORTANCE[r.importance] > IMPORTANCE[same.importance]) same.importance = r.importance;
+      for (const a of r.aliases) if (!same.aliases.includes(a) && a.toLowerCase() !== same.term.toLowerCase()) same.aliases.push(a);
+    };
+    for (const raw0 of list) {
+      const raw = typeof raw0 === 'string' ? { term: raw0 } : raw0;
       if (!raw || typeof raw !== 'object') continue;
-      const term = clean(raw.term || raw.k || raw.name).replace(/^[-•*\s]+/, '');
-      if (term.length < 1 || term.length > 70) { dropped++; continue; }
-      const category = CATEGORIES.includes(String(raw.category || '').toLowerCase()) ? String(raw.category).toLowerCase() : 'skill';
-      const importance = IMPORTANCE[String(raw.importance || '').toLowerCase()] ? String(raw.importance).toLowerCase() : 'preferred';
-      const aliases = strs(raw.aliases, 8, 40).filter((a) => a.toLowerCase() !== term.toLowerCase());
-      const related = strs(raw.related, 6, 40);
-      const r = { term, aliases, related, category, importance };
-      const grounded = category === 'responsibility'
-        ? jdSentences.some((s) => { const c = stems(term).filter((w) => !STOP.has(w)); return c.length && c.filter((w) => s.includes(w)).length / c.length >= 0.6; })
-        : [term, ...aliases].some((t) => phraseAt(jdStems, stems(t)) >= 0);
-      if (!grounded) { dropped++; continue; }
-      const key = stems(term).join(' ');
-      const same = reqs.find((x) => [x.term, ...x.aliases].some((t) => stems(t).join(' ') === key) || [term, ...aliases].some((t) => stems(t).join(' ') === stems(x.term).join(' ')));
-      if (same) {
-        if (IMPORTANCE[importance] > IMPORTANCE[same.importance]) same.importance = importance;
-        for (const a of aliases) if (!same.aliases.includes(a) && a.toLowerCase() !== same.term.toLowerCase()) same.aliases.push(a);
+      let term = clean(raw.term || raw.k || raw.name || raw.keyword || raw.skill || raw.requirement || raw.text || raw.title || raw.label).replace(/^[-•*\s]+|[.:;]+$/g, '');
+      if (term.length < 1 || term.length > 90) { dropped++; continue; }
+      const category = normCategory(raw.category || raw.type || raw.kind);
+      const importance = normImportance(raw.importance || raw.priority || raw.level || (raw.required === true ? 'required' : raw.required === false ? 'preferred' : ''));
+      let aliases = strs(raw.aliases || raw.synonyms || raw.equivalents, 8, 40);
+      const related = strs(raw.related || raw.relatedSkills, 6, 40);
+      // "AWS (Amazon Web Services)": both names are the same thing.
+      const paren = term.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+      if (paren && category !== 'responsibility') { term = paren[1].trim(); aliases = [paren[2].trim(), ...aliases]; }
+      aliases = [...new Set(aliases.filter((a) => a.toLowerCase() !== term.toLowerCase()))];
+      if (category === 'responsibility') {
+        const c = stems(term).filter((w) => !STOP.has(w));
+        if (c.length && jdSentences.some((s) => c.filter((w) => s.includes(w)).length / c.length >= 0.6)) add({ term, aliases, related, category, importance });
+        else { dropped++; droppedTerms.push(term); }
         continue;
       }
-      reqs.push(r);
+      if ([term, ...aliases].some(inJd)) { add({ term, aliases, related, category, importance }); continue; }
+      // "AWS / GCP / Azure", "Python or Go": each part the posting names is its own requirement.
+      const parts = term.split(/\s*(?:\/|,|\bor\b|\band\b|&)\s*/i).map((x) => x.trim()).filter((x) => x.length >= 1);
+      const hits = parts.length > 1 ? parts.filter(inJd) : [];
+      if (hits.length) { for (const h of hits) add({ term: h, aliases: [], related, category, importance }); continue; }
+      if (nearJd(term)) { add({ term, aliases, related, category, importance }); continue; }
+      dropped++;
+      droppedTerms.push(term);
     }
     const order = { required: 0, preferred: 1, optional: 2 };
     reqs.sort((a, b) => order[a.importance] - order[b.importance]);
@@ -209,7 +264,7 @@ ${clean(job.description).slice(0, 9000)}`;
       titleAliases: strs(src.titleAliases, 5, 60),
       yearsRequired: years ?? null,
       degree: level && degreeSaid ? { level, fields: strs(dg.fields, 6, 50), required: dg.required !== false } : null,
-      requirements, dropped, at: new Date().toISOString(),
+      requirements, dropped, droppedTerms: droppedTerms.slice(0, 8), received: list.length, at: new Date().toISOString(),
     };
   }
 
@@ -651,5 +706,5 @@ ${lines.slice(0, 16000)}`;
   }
 
   root.JobBidATS = { VERSION, DEFAULT_WEIGHTS, WEIGHT_LABELS, IMPORTANCE, SECTION_NAMES, clean, tokens, stem, stems, phraseAt, hash, headingKey,
-    buildModel, analysisPrompt, validateAnalysis, matchRequirement, resumeYears, score, optimizePrompt, validateChanges, applyToLines, compareRows, verify, nextStep, yearsInText };
+    buildModel, analysisPrompt, validateAnalysis, requirementList, matchRequirement, resumeYears, score, optimizePrompt, validateChanges, applyToLines, compareRows, verify, nextStep, yearsInText };
 })(typeof self !== 'undefined' ? self : globalThis);
