@@ -478,6 +478,14 @@
       .acts button { all:unset; cursor:pointer; flex:1; text-align:center; padding:9px 8px; border-radius:10px; border:1px solid var(--stroke); background:var(--card); font-size:13px; font-weight:600; }
       .acts button:hover { background:var(--hover); }
       .acts button[disabled] { opacity:.45; cursor:not-allowed; }
+      .atsteps { list-style:none; margin:0; padding:0; }
+      .atsteps li { display:flex; gap:8px; padding:5px 0; font-size:12.5px; }
+      .atsteps li .t3 { display:block; font-size:11px; color:var(--t3); }
+      .atsteps .d { width:18px; height:18px; flex:none; border-radius:50%; display:grid; place-items:center; font-size:10px; font-weight:800; background:var(--bg); color:var(--t3); }
+      .atsteps li.done .d, .atsteps li.skip .d { background:var(--okbg); color:var(--ok); }
+      .atsteps li.fail .d { background:var(--errbg); color:var(--err); } .atsteps li.fail .t3 { color:var(--err); }
+      .atsteps li.now .d { background:transparent; border:2.5px solid var(--stroke); border-top-color:var(--accent); animation:spin .9s linear infinite; }
+      .atsteps li.todo b { color:var(--t3); font-weight:600; }
       .acts select.mini { flex:1; min-width:0; font:inherit; font-size:12px; padding:6px; border-radius:10px; border:1px solid var(--stroke); background:var(--card); color:var(--text); }
       .acts button svg { width:14px; height:14px; vertical-align:-2px; margin-right:6px; }
       .fixbox { display:flex; flex-direction:column; gap:8px; }
@@ -758,7 +766,7 @@
   let jobState = { key: '' };
 
   async function loadData() {
-    data = { ...data, ...(await store.get(['profiles', 'settings', 'schedule', 'applications', 'panelCollapsed', 'panelTab', 'keyHealth', 'ipInfo', 'panelWidth', 'hubConfig', 'hubState', 'panelPos', 'tabTop', 'aiStatus', 'extUpdate'])) };
+    data = { ...data, ...(await store.get(['profiles', 'settings', 'schedule', 'applications', 'panelCollapsed', 'panelTab', 'keyHealth', 'ipInfo', 'panelWidth', 'hubConfig', 'hubState', 'panelPos', 'tabTop', 'aiStatus', 'extUpdate', 'atsProgress'])) };
     panelW = clampW(data.panelWidth);
     pos = data.panelPos && Number.isFinite(data.panelPos.x) ? data.panelPos : null;
     tabTop = Number.isFinite(data.tabTop) ? data.tabTop : null;
@@ -942,11 +950,15 @@
   function runAts(force) {
     const job = api.getJob(), p = activeProfile();
     const key = atsKeyOf(job, p);
-    atsState = { key, status: 'loading', res: atsState.key === key ? atsState.res : null };
+    atsState = { key, status: 'loading', res: atsState.key === key ? atsState.res : null, t0: Date.now() };
     render();
     api.send({ type: 'atsScore', force, profile: p, resumeId: atsResumeId(p), job: atsJob(job) }).then((r) => {
       if (atsState.key !== key) return;
       atsState = r.ok && r.result ? { key, status: 'done', res: r.result } : { key, status: 'error', error: r.error || 'Failed', res: atsState.res };
+      const title = r.ok && r.result ? `Resume scored: ${r.result.report.score}/100` : 'Scoring failed';
+      const msg = r.ok && r.result ? `${r.result.report.counts.matched} matched, ${r.result.report.counts.partial} partly, ${r.result.report.counts.missing} missing · ${r.result.resume.name}` : r.error || '';
+      api.toast({ kind: r.ok && r.result ? 'ok' : 'err', title, msg, ms: 6000 });
+      if (document.hidden) api.send({ type: 'atsNotify', title, msg });
       render();
     });
   }
@@ -998,7 +1010,12 @@
     const s = atsState;
     const st = data.aiStatus || {};
     if (s.status === 'loading') {
-      return `<div class="card"><b>Estimated ATS match</b><div class="thinking" style="margin-top:6px"><span class="spin"></span>${esc((st.state === 'working' && st.stage) || 'Reading the job and the resume...')}</div></div>`;
+      // The background's steps for this run, ticking off as they finish.
+      const pr = data.atsProgress;
+      const mine = pr && pr.op === 'score' && new Date(pr.startedAt).getTime() >= (s.t0 || 0) - 1500 ? pr : null;
+      const steps = mine ? `<ol class="atsteps">${mine.steps.map((x) => `<li class="${x.state}"><span class="d">${{ done: '✓', skip: '✓', fail: '✕' }[x.state] || ''}</span><span class="grow"><b>${esc(x.label)}</b>
+          <span class="t3">${esc(x.state === 'now' && st.state === 'working' && /^(Asking|Waiting|Retry)/i.test(st.stage || '') ? st.stage : x.detail)}</span></span></li>`).join('')}</ol>` : '<div class="thinking"><span class="spin"></span>Starting...</div>';
+      return `<div class="card"><b>Estimated ATS match</b><div style="margin-top:6px">${steps}</div></div>`;
     }
     if (s.status !== 'done') {
       return `<div class="card"><div class="ats"><div class="grow"><b>Estimated ATS match</b>
@@ -1859,7 +1876,7 @@
   document.addEventListener('input', schedule, true);
   document.addEventListener('change', schedule, true);
   chrome.storage.onChanged.addListener(async (c) => {
-    if (c.profiles || c.settings || c.schedule || c.applications || c.panelCollapsed || c.panelTab || c.keyHealth || c.ipInfo || c.hubConfig || c.hubState || c.aiStatus || c.extUpdate) {
+    if (c.profiles || c.settings || c.schedule || c.applications || c.panelCollapsed || c.panelTab || c.keyHealth || c.ipInfo || c.hubConfig || c.hubState || c.aiStatus || c.extUpdate || c.atsProgress) {
       await loadData();
       schedule();
     }

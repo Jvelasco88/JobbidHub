@@ -94,6 +94,27 @@
     select, input[type=number] { font:inherit; padding:5px 8px; border-radius:8px; border:1px solid var(--stroke); background:var(--card); color:var(--text); }
     input[type=number] { width:70px; }
     details summary { cursor:pointer; color:var(--accent); font-weight:600; }
+    .live { display:grid; grid-template-columns: minmax(280px, 400px) 1fr; gap:14px; align-items:start; }
+    @media (max-width: 860px) { .live { grid-template-columns: 1fr; } }
+    ol.steps { list-style:none; margin:0; padding:0; }
+    ol.steps li { display:flex; gap:10px; padding:9px 0; border-top:1px solid var(--stroke); }
+    ol.steps li:first-child { border-top:0; }
+    ol.steps .dot { width:22px; height:22px; flex:none; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:800; background:var(--stroke); color:var(--t3); }
+    ol.steps li.done .dot, ol.steps li.skip .dot { background:var(--okbg); color:var(--ok); }
+    ol.steps li.fail .dot { background:var(--errbg); color:var(--err); }
+    ol.steps li.now .dot { background:transparent; border:3px solid var(--stroke); border-top-color:var(--accent); animation:sp .9s linear infinite; }
+    ol.steps li.todo b { color:var(--t3); font-weight:600; }
+    ol.steps li.fail .t3 { color:var(--err); }
+    .pv { padding:6px 10px; border-top:1px solid var(--stroke); font-size:12.5px; display:flex; gap:8px; align-items:flex-start; transition:background .4s; }
+    .pv:first-child { border-top:0; }
+    .pv.heading { font-weight:700; color:var(--t2); }
+    .pv.changed, .pv.added { background:var(--warnbg); } .pv.removed { background:var(--del); text-decoration:line-through; color:var(--t3); }
+    .pv.wrt.changed, .pv.wrt.added { background:var(--add); }
+    .pv .st { flex:none; font-size:11px; font-weight:700; padding:1px 7px; border-radius:6px; background:var(--stroke); color:var(--t2); min-width:62px; text-align:center; }
+    .pv .st.wr { background:var(--warnbg); color:var(--warn); animation:pulse 1.1s ease-in-out infinite; }
+    .pv .st.ok { background:var(--okbg); color:var(--ok); }
+    @keyframes pulse { 50% { opacity:.45; } }
+    .cmp .mk { font-weight:800; margin-right:6px; } .cmp .mk.ok { color:var(--ok); } .cmp .mk.no { color:var(--err); }
     ul { margin:6px 0; padding-left:18px; }
   `;
 
@@ -149,7 +170,44 @@
     main.scrollTop = keep;
     root.getElementById('foot').innerHTML = st.busy ? '<span class="t3">Working... you can keep this window open.</span>' : footHtml();
   }
-  const busyHtml = () => `<div class="busy"><div class="spin"></div><b>${esc(st.busy)}</b><div class="t2" id="stage">${esc(st.stage)}</div><div class="t3" id="secs">${Math.round((Date.now() - st.t0) / 1000)}s</div></div>`;
+  const busyHtml = () => `<div class="live"><div class="card"><h3 style="display:flex">${esc(st.busy)}<span class="grow"></span><span class="t3" id="secs">${Math.round((Date.now() - st.t0) / 1000)}s</span></h3><div id="steps">${stepsHtml()}</div></div>
+    <div id="preview">${previewHtml()}</div></div>`;
+  const fmtMs = (ms) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
+  // This call's progress only (an older run's record may still be in storage).
+  const myProg = () => (st.prog && new Date(st.prog.startedAt).getTime() >= st.t0 - 1500 ? st.prog : null);
+  function stepsHtml() {
+    const p = myProg();
+    if (!p) return '<div class="t3">Starting...</div>';
+    const secs = Math.round((Date.now() - new Date(p.at).getTime()) / 1000);
+    return `<ol class="steps">${p.steps.map((x) => `<li class="${x.state}"><span class="dot">${{ done: '✓', skip: '✓', fail: '✕' }[x.state] || ''}</span><div class="grow">
+      <b>${esc(x.label)}</b>${x.state === 'done' && x.ms >= 50 ? ` <span class="t3">${fmtMs(x.ms)}</span>` : ''}${x.state === 'now' && secs > 1 ? ` <span class="t3">${secs}s</span>` : ''}
+      <div class="t3">${esc(x.state === 'now' && st.stage && /^(Asking|Waiting|Retry)/i.test(st.stage) ? st.stage : x.detail)}</div></div></li>`).join('')}</ol>`;
+  }
+  // While the new file is built: the resume with every accepted change, "writing" until the file is written.
+  function previewHtml() {
+    if (st.busyOp === 'optimize') {
+      const t = [...st.targets].map(([term, how]) => `${term}${how === 'confirmed' ? ' (confirmed)' : ''}`);
+      return `<div class="card"><h3>What the AI is asked to do</h3><div class="t2">Sections: ${[...st.sections].map((z) => SECTIONS[z]).join(', ')}</div>
+        <div class="t2" style="margin-top:4px">Keywords: ${t.length ? esc(t.join(', ')) : 'none - sharpen what is there'}</div>
+        <div class="t3" style="margin-top:8px">Every change it proposes is then checked: new numbers, skills you didn't confirm, new names, locked lines.</div></div>`;
+    }
+    if (st.busyOp !== 'build' || !st.proposal) return '';
+    const changes = st.proposal.changes.filter((c) => st.accept.has(c.cid));
+    const written = myProg()?.steps[1]?.state === 'done';
+    const rep = new Map(changes.filter((c) => c.op === 'replace').map((c) => [c.id, c]));
+    const del = new Set(changes.filter((c) => c.op === 'delete').map((c) => c.id));
+    const ins = new Map();
+    for (const c of changes.filter((x) => x.op === 'insert')) { if (!ins.has(c.after)) ins.set(c.after, []); ins.get(c.after).push(c); }
+    const chip = `<span class="st ${written ? 'ok' : 'wr'}">${written ? 'written' : 'writing'}</span>`;
+    const rows = [];
+    for (const l of st.res.lines) {
+      if (l.kind === 'heading') rows.push(`<div class="pv heading"><span class="st" style="visibility:hidden">-</span>${esc(l.text)}</div>`);
+      else if (rep.has(l.id)) rows.push(`<div class="pv changed ${written ? 'wrt' : ''}">${chip}<span>${esc(rep.get(l.id).text)}</span></div>`);
+      else if (del.has(l.id)) rows.push(`<div class="pv removed">${chip}<span>${esc(l.text)}</span></div>`);
+      for (const c of ins.get(l.id) || []) rows.push(`<div class="pv added ${written ? 'wrt' : ''}">${chip}<span>${l.bullet || c.op === 'insert' ? '• ' : ''}${esc(c.text)}</span></div>`);
+    }
+    return `<div class="card"><h3>Your resume, ${written ? 'written' : 'being written'}: ${changes.length} change${changes.length === 1 ? '' : 's'}</h3><div style="border:1px solid var(--stroke);border-radius:10px;overflow:hidden">${rows.join('')}</div></div>`;
+  }
 
   // ---------- Step 1: the score ----------
 
@@ -267,6 +325,7 @@
     const statusTag = (s) => `<span class="tag ${s === 'matched' ? 'ok' : s === 'partial' ? 'warn' : 'err'}">${s}</span>`;
     const missingIn = v.present.filter((x) => !x.ok).length;
     const rows = b.compare.filter((r) => !st.onlyChanges || r.kind !== 'same' || r.heading);
+    const present = new Map(v.present.map((x) => [x.cid, x.ok]));
     return `
       <div class="card"><div class="top">
         <span class="big" style="color:${color(b.before.score)}">${fmt(b.before.score)}</span><span style="font-size:24px">→</span><span class="big" style="color:${color(b.after.score)}">${fmt(b.after.score)}<small>/100</small></span>
@@ -288,7 +347,9 @@
       </div>
       <div class="card"><h3 style="display:flex;align-items:center">Original vs. optimized <span class="grow"></span><label class="t3" style="font-weight:400"><input type="checkbox" data-act="onlyChanges" ${st.onlyChanges ? 'checked' : ''}> only changed lines</label></h3>
         <div class="cmp"><div class="h">Original</div><div class="h">Optimized</div>
-          ${rows.map((r) => `<div class="a ${r.kind} ${r.heading ? 'heading' : ''}">${esc(r.a)}</div><div class="b ${r.kind} ${r.heading ? 'heading' : ''}">${esc(r.b)}</div>`).join('')}</div>
+          ${rows.map((r) => { const ok = r.cid ? present.get(r.cid) : null; const mk = ok == null ? '' : `<span class="mk ${ok ? 'ok' : 'no'}" title="${ok ? 'Found in the new file when it was read back' : 'Not found in the new file'}">${ok ? '✓' : '✕'}</span>`;
+    return `<div class="a ${r.kind} ${r.heading ? 'heading' : ''}">${esc(r.a)}</div><div class="b ${r.kind} ${r.heading ? 'heading' : ''}">${mk}${esc(r.b)}</div>`; }).join('')}</div>
+        <div class="t3" style="margin-top:6px">✓ = the line was found when the new file was read back.</div>
         <details style="margin-top:10px"><summary>The new file's text, as an ATS reads it</summary><div class="cmp" style="grid-template-columns:1fr;margin-top:8px">${b.finalLines.map((l) => `<div class="${l.kind === 'heading' ? 'heading' : ''}">${l.kind === 'bullet' ? '• ' : ''}${esc(l.text)}</div>`).join('')}</div></details>
       </div>`;
   }
@@ -314,24 +375,43 @@
   // ---------- Actions ----------
 
   async function call(type, extra, label) {
-    st.busy = label; st.error = ''; st.stage = ''; st.t0 = Date.now();
+    st.busy = label; st.error = ''; st.stage = ''; st.t0 = Date.now(); st.prog = null;
+    st.busyOp = { atsScore: 'score', atsOptimize: 'optimize', atsBuild: 'build' }[type];
     render();
     clearInterval(poll);
+    let lastPreview = '';
     poll = setInterval(async () => {
       try {
-        const { aiStatus } = await chrome.storage.local.get('aiStatus');
-        st.stage = aiStatus?.state === 'working' ? aiStatus.stage || '' : st.stage;
+        const { aiStatus, atsProgress } = await chrome.storage.local.get(['aiStatus', 'atsProgress']);
+        st.stage = aiStatus?.state === 'working' ? aiStatus.stage || '' : '';
+        if (atsProgress) st.prog = atsProgress;
       } catch { /* extension reloaded */ }
-      const a = root?.getElementById('stage'), b = root?.getElementById('secs');
-      if (a) a.textContent = st.stage;
+      const a = root?.getElementById('steps'), b = root?.getElementById('secs'), c = root?.getElementById('preview');
+      if (a) a.innerHTML = stepsHtml();
       if (b) b.textContent = Math.round((Date.now() - st.t0) / 1000) + 's';
-    }, 700);
+      // The preview is redrawn only when it changes (keeps its scroll position).
+      if (c) { const html = previewHtml(); if (html !== lastPreview) { c.innerHTML = html; lastPreview = html; } }
+    }, 400);
     let r;
     try { r = await ctx.api.send({ type, profile: ctx.profile, job: ctx.job, resumeId: st.resumeId, file: st.file, ...extra }); } catch (e) { r = { ok: false, error: e.message }; }
     clearInterval(poll);
     st.busy = '';
-    if (!r?.ok || !r.result) { st.error = r?.error || 'Something went wrong. Try again.'; render(); return null; }
-    return r.result;
+    if (!r?.ok || !r.result) {
+      st.error = r?.error || 'Something went wrong. Try again.';
+      notify('err', { atsScore: 'Scoring failed', atsOptimize: 'Optimizing failed', atsBuild: 'Building the resume failed' }[type], st.error);
+      render();
+      return null;
+    }
+    const res = r.result;
+    if (type === 'atsScore') notify('ok', `Resume scored: ${fmt(res.report.score)}/100`, `${res.report.counts.matched} matched, ${res.report.counts.partial} partly, ${res.report.counts.missing} missing · ${res.resume.name}`);
+    if (type === 'atsOptimize') notify('ok', `${res.changes.length} change${res.changes.length === 1 ? '' : 's'} proposed`, `${res.changes.filter((c) => c.safe).length} passed every check, ${res.changes.filter((c) => !c.safe).length} flagged. Review them.`);
+    if (type === 'atsBuild') notify('ok', `New resume: ${fmt(res.before.score)} → ${fmt(res.after.score)}`, `${res.verify.present.filter((x) => x.ok).length} change${res.verify.present.length === 1 ? '' : 's'} in the file · ${res.file.name}`);
+    return res;
+  }
+  // Every finished step says so on the page; with the tab in the background, also a Chrome notification.
+  function notify(kind, title, msg) {
+    ctx.api.toast({ kind, title, msg, ms: kind === 'err' ? 9000 : 6000 });
+    if (document.hidden) ctx.api.send({ type: 'atsNotify', title, msg });
   }
   async function rescore(force = false) {
     const res = await call('atsScore', { force }, force ? 'Reading the job again...' : 'Scoring the resume...');

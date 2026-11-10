@@ -34,12 +34,16 @@ function fakeChrome(seed) {
   const mem = { ...seed };
   window.__held = null;
   window.__mem = mem;
+  window.__notes = [];
+  const changed = [];
   const answer = async (msg) => {
     switch (msg.type) {
       case 'getContext': return { ok: true, profile: mem.profiles[0], settings: { overwrite: false, useAI: false } };
       case 'atsScore': return { ok: true, result: await window.atsScore(msg) };
       case 'atsOptimize': return { ok: true, result: await window.atsOptimize(msg) };
-      case 'atsBuild': return { ok: true, result: await window.atsBuild(msg) };
+      // The result comes back 1.5 s after the work is done, so the test can see the finished steps and preview.
+      case 'atsBuild': { const result = await window.atsBuild(msg); await new Promise((r) => setTimeout(r, 1500)); return { ok: true, result }; }
+      case 'atsNotify': window.__notes.push(msg.title); return { ok: true };
       case 'atsWeights': return { ok: true, weights: {}, defaults: {} };
       case 'holdFixedResume': window.__held = msg.file; return { ok: true };
       case 'analyzeMatch': return { ok: true, match: null };
@@ -59,14 +63,16 @@ function fakeChrome(seed) {
       onMessage: { addListener() {} },
     },
     storage: {
-      onChanged: { addListener() {} },
+      onChanged: { addListener: (f) => changed.push(f) },
       local: {
-        get: async (k) => { const keys = k == null ? Object.keys(mem) : Array.isArray(k) ? k : [k]; return Object.fromEntries(keys.filter((x) => x in mem).map((x) => [x, mem[x]])); },
-        set: async (o) => { Object.assign(mem, o); },
+        get: async (k) => { const keys = k == null ? Object.keys(mem) : Array.isArray(k) ? k : [k]; return Object.fromEntries(keys.filter((x) => x in mem).map((x) => [x, structuredClone(mem[x])])); },
+        set: async (o) => { Object.assign(mem, structuredClone(o)); const c = Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { newValue: v }])); for (const f of changed) f(c, 'local'); },
         remove: async () => {},
       },
       session: { get: async () => ({}), set: async () => {} },
     },
+    notifications: { onClicked: { addListener() {} }, create() {}, clear() {} },
+    tabs: { update: async () => ({}) }, windows: { update: async () => ({}) },
   };
 }
 
@@ -74,7 +80,8 @@ function fakeChrome(seed) {
 function fakeAi(aiJob) {
   window.aiStage = () => {};
   window.ai = async (prompt) => {
-    if (prompt.includes('ATS (applicant tracking system) configuration expert')) return aiJob;
+    if (prompt.includes('ATS (applicant tracking system) configuration expert')) { await new Promise((r) => setTimeout(r, 1200)); return aiJob; }
+    await new Promise((r) => setTimeout(r, 1500));
     const id = (start) => { const m = prompt.match(new RegExp('\\[(\\d+)\\] \\([^)]*\\) ' + start.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))); return m ? Number(m[1]) : -1; };
     return {
       changes: [
@@ -120,6 +127,8 @@ async function run(kind) {
 
   await until('the Match tab shows the ATS card', () => inPanel("return !!r.getElementById('atsRun')"));
   await inPanel("r.getElementById('atsRun').click()");
+  const scoring = await until('the panel shows the steps while scoring', () => inPanel("const li = [...r.querySelectorAll('ol.atsteps li')]; return li.length === 3 && li[0].classList.contains('now') ? li.map((x) => x.textContent.replace(/\s+/g, ' ').trim()) : null"));
+  check('panel steps: reading the job first', scoring && /Read the job/.test(scoring[0]) && /Score it/.test(scoring[2]), JSON.stringify(scoring));
   const score = await until('the resume is scored', () => inPanel("const n = r.querySelector('.card .ats .num'); return n && /\\/100/.test(n.textContent) ? n.textContent : ''"));
   check('the card shows a score out of 100', !!score, score);
   await shot('1-card');
@@ -139,6 +148,10 @@ async function run(kind) {
     await inOpt("const i = r.querySelector('input[data-act=mode][value=rebuild]'); i.checked = true; i.dispatchEvent(new Event('change', { bubbles: true }))");
   }
   await inOpt("r.querySelector('[data-act=optimize]').click()");
+  const during = await until('steps are shown while the AI works', () => inOpt("const li = [...r.querySelectorAll('ol.steps li')]; return li.length === 4 && li[2].classList.contains('now') ? li.map((x) => x.className + ':' + x.textContent.replace(/\\s+/g, ' ').trim()) : null"));
+  await shot('2b-optimizing');
+  check('while the AI works: job and resume steps done, AI step running', during && /done|skip/.test(during[0]) && /^done/.test(during[1]), JSON.stringify(during));
+  check('while the AI works: what it was asked is shown', await inOpt("return /What the AI is asked to do[\\s\\S]*Docker/.test(r.getElementById('preview').textContent)"));
   await until('the changes are shown', () => inOpt("return r.querySelectorAll('.chg').length >= 3"));
   const review = await inOpt("return [...r.querySelectorAll('.chg')].map((c) => ({ on: c.querySelector('input').checked, flagged: c.classList.contains('flag'), text: c.textContent }))");
   await shot('3-review');
@@ -146,11 +159,21 @@ async function run(kind) {
   check('the invented one (30%, Snowflake) is flagged and off', review?.some((c) => /30%/.test(c.text) && c.flagged && !c.on));
   check('the supported ones are on', review?.filter((c) => c.on).length === 2);
   check('"Not added" lists Snowflake', await inOpt("return /Not added[\\s\\S]*Snowflake/.test(r.getElementById('main').textContent)"));
+  // The tab goes to the background: the finished build also sends a Chrome notification.
+  await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }));
   await inOpt("r.querySelector('[data-act=build]').click()");
+  const built = await until('the build steps finish while the window waits', () => inOpt("const li = [...r.querySelectorAll('ol.steps li')]; return li.length === 5 && li.every((x) => /done|skip/.test(x.className)) ? li.map((x) => x.textContent.replace(/\\s+/g, ' ').trim()) : null"));
+  await shot('3b-building');
+  check('build steps: written, read back, scored, checked', built && /Score it again.*→/.test(built[3]) && /changes found in the file/.test(built[4]), JSON.stringify(built));
+  check('live preview: the accepted changes are marked written', await inOpt("const pv = [...r.querySelectorAll('#preview .pv.changed, #preview .pv.added')]; return pv.length === 2 && pv.every((x) => /written/.test(x.textContent))"));
   await until('the result is shown', () => inOpt("return /Original vs. optimized/.test(r.getElementById('main').textContent)"), 30000);
   const res = await inOpt("const big = [...r.querySelectorAll('.big')].map((b) => parseFloat(b.textContent)); return { big, text: r.getElementById('main').textContent }");
   await shot('4-result');
   check('before and after scores shown, after higher', res?.big.length === 2 && res.big[1] > res.big[0], JSON.stringify(res?.big));
+  check('each changed line is marked as found in the new file', await inOpt("return r.querySelectorAll('.cmp .mk.ok').length === 2 && !r.querySelector('.cmp .mk.no')"));
+  check('a message says the new resume is ready', await page.evaluate(() => /New resume:/.test(document.querySelector('#jobbid-root')?.shadowRoot?.querySelector('.toast .title')?.textContent || '')));
+  check('with the tab in the background, a Chrome notification too', await page.evaluate(() => window.__notes.some((t) => /New resume:/.test(t))));
+  await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }));
   check('Docker checked as done in the new file', /Docker[\s\S]{0,200}done/.test(res?.text || ''));
   check('the comparison shows the new bullet', /Packaged ranking models in Docker images/.test(res?.text || ''));
   check('the invented line is not in the new file', !/Cut costs by 30%/.test(res?.text || ''));

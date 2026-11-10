@@ -805,13 +805,35 @@ ${(job.description || '').slice(0, 7000)}`;
 // so the score before and after the optimizer compares. Optimized files live only in the page that asked
 // (and the session hold for its application form), never in the profile.
 
+// Live progress for the panel and the optimizer window ("atsProgress"): each step todo / now / done / skip / fail,
+// with how long it took and what it found. The AI's own live line (aiStatus.stage) shows under the step running.
+function atsSteps(op, labels) {
+  const t0 = Date.now();
+  const steps = labels.map((label) => ({ label, state: 'todo', ms: 0, detail: '' }));
+  let at = t0;
+  const save = (end = '') => chrome.storage.local.set({ atsProgress: { op, steps, startedAt: new Date(t0).toISOString(), at: new Date().toISOString(), end } }).catch(() => {});
+  const closeOpen = () => steps.forEach((s) => { if (s.state === 'now') { s.state = 'done'; s.ms = Date.now() - at; } });
+  save();
+  return {
+    start(i, detail = '') { closeOpen(); steps[i].state = 'now'; steps[i].detail = detail; at = Date.now(); save(); },
+    done(i, detail) { steps[i].state = 'done'; steps[i].ms = Date.now() - at; if (detail != null) steps[i].detail = detail; at = Date.now(); save(); },
+    skip(i, detail = '') { steps[i].state = 'skip'; steps[i].detail = detail; save(); },
+    finish(detail = 'done') { closeOpen(); save(detail); },
+    fail(msg) { const s = steps.find((x) => x.state === 'now') || steps.find((x) => x.state === 'todo'); if (s) { s.state = 'fail'; s.detail = msg; } save('failed'); },
+  };
+}
+
 // The job's requirements, checked against its text. Cached per job text.
-async function atsJobAnalysis(job, { force = false, cachedOnly = false } = {}) {
+async function atsJobAnalysis(job, { force = false, cachedOnly = false, prog = null, step = 0 } = {}) {
   const key = 'j' + JobBidATS.hash(`${job.title || ''}\n${job.description || ''}`);
   const { atsJobs = {} } = await chrome.storage.local.get('atsJobs');
-  if (!force && atsJobs[key]?.version === JobBidATS.VERSION) return atsJobs[key];
+  if (!force && atsJobs[key]?.version === JobBidATS.VERSION) {
+    prog?.skip(step, `already read: ${atsJobs[key].requirements.length} requirements`);
+    return atsJobs[key];
+  }
   if (cachedOnly) return null;
   if (String(job.description || '').length < 200) throw new Error('Open the job posting first: there is no job description on this page');
+  prog?.start(step, 'The AI reads the posting');
   aiStage('Reading the job\'s requirements...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
   try {
     const out = await ai(JobBidATS.analysisPrompt(job), { temperature: 0.1, timeoutMs: 150000, accept: (v) => Array.isArray(v?.requirements) });
@@ -821,6 +843,7 @@ async function atsJobAnalysis(job, { force = false, cachedOnly = false } = {}) {
     for (const k of Object.keys(atsJobs).sort((x, y) => (atsJobs[y].at || '').localeCompare(atsJobs[x].at || '')).slice(40)) delete atsJobs[k];
     await chrome.storage.local.set({ atsJobs });
     aiStage(`Job read: ${a.requirements.length} requirements`, { state: 'done' });
+    prog?.done(step, `${a.requirements.length} requirements${a.dropped ? `, ${a.dropped} not in the posting dropped` : ''}`);
     return a;
   } catch (e) {
     aiStage(e.message, { state: 'error' });
@@ -848,67 +871,122 @@ async function atsRead(src, analysis) {
   return { doc, model, report };
 }
 const atsLines = (model) => model.lines.map((l) => ({ id: l.id, text: l.text, zone: l.zone, kind: l.kind, lock: l.lock, bullet: l.bullet }));
+// Runs one ATS job with its steps; a failure marks the step it happened in.
+async function atsRun(op, labels, fn) {
+  const prog = atsSteps(op, labels);
+  try { return await fn(prog); } catch (e) { prog.fail(e.message); throw e; }
+}
 
 async function atsScore({ profile, resumeId, file, job, force, cachedOnly }) {
-  const analysis = await atsJobAnalysis(job, { force, cachedOnly });
-  if (!analysis) return null;
+  if (cachedOnly) {
+    const analysis = await atsJobAnalysis(job, { cachedOnly: true });
+    if (!analysis) return null;
+    return atsScoreWith(analysis, profile, resumeId, file, null);
+  }
+  return atsRun('score', ['Read the job\'s requirements', 'Read the resume file', 'Score it'], async (prog) => {
+    const analysis = await atsJobAnalysis(job, { force, prog, step: 0 });
+    const out = await atsScoreWith(analysis, profile, resumeId, file, prog);
+    prog.finish(`${out.report.score}/100`);
+    return out;
+  });
+}
+async function atsScoreWith(analysis, profile, resumeId, file, prog) {
+  prog?.start(1);
   const src = await atsSource(profile, resumeId, file);
-  const { doc, model, report } = await atsRead(src, analysis);
+  const doc = await rdOpen(src);
+  const model = JobBidATS.buildModel(doc.lines, doc.meta);
+  prog?.done(1, `${src.name}: ${model.lines.length} lines, ${model.words} words`);
+  prog?.start(2);
+  const report = JobBidATS.score(model, analysis, await atsWeights());
+  prog?.done(2, `${report.score}/100 · ${report.counts.matched} matched, ${report.counts.partial} partly, ${report.counts.missing} missing`);
   const sections = ['summary', 'skills', 'experience', 'projects'].filter((z) => model.lines.some((l) => l.zone === z && !l.lock && l.kind !== 'heading'));
   return { analysis, report, resume: { id: src.id, name: src.name, type: doc.type, kind: doc.kind, optimized: src.optimized }, lines: atsLines(model), sections };
 }
 
 async function atsOptimize({ profile, resumeId, file, job, sections, targets = [], mode }) {
-  const analysis = await atsJobAnalysis(job, {});
-  const src = await atsSource(profile, resumeId, file);
-  const { doc, model, report } = await atsRead(src, analysis);
-  const sel = (sections || []).filter((z) => ['summary', 'skills', 'experience', 'projects'].includes(z));
-  if (!sel.length) throw new Error('Choose at least one section to improve');
-  const fitsOnly = doc.kind === 'pdf' && mode === 'keep';
-  aiStage('Tailoring the resume to the job...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
-  try {
-    const out = await ai(JobBidATS.optimizePrompt({ model, analysis, report, sections: sel, targets, job, fitsOnly }), { temperature: 0.35, timeoutMs: 280000, accept: (v) => Array.isArray(v?.changes) });
+  return atsRun('optimize', ['Read the job\'s requirements', 'Read the resume file', 'AI writes the changes', 'Check every change'], async (prog) => {
+    const analysis = await atsJobAnalysis(job, { prog, step: 0 });
+    prog.start(1);
+    const src = await atsSource(profile, resumeId, file);
+    const { doc, model, report } = await atsRead(src, analysis);
+    prog.done(1, `${model.lines.length} lines · ${model.lines.filter((l) => l.lock).length} locked (names, titles, dates, education)`);
+    const sel = (sections || []).filter((z) => ['summary', 'skills', 'experience', 'projects'].includes(z));
+    if (!sel.length) throw new Error('Choose at least one section to improve');
+    const fitsOnly = doc.kind === 'pdf' && mode === 'keep';
+    prog.start(2, `${sel.map((z) => JobBidATS.SECTION_NAMES[z]).join(', ')} · ${targets.length} keyword${targets.length === 1 ? '' : 's'}`);
+    aiStage('Tailoring the resume to the job...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
+    let out;
+    try {
+      out = await ai(JobBidATS.optimizePrompt({ model, analysis, report, sections: sel, targets, job, fitsOnly }), { temperature: 0.35, timeoutMs: 280000, accept: (v) => Array.isArray(v?.changes) });
+      aiStage('Changes received', { state: 'done' });
+    } catch (e) {
+      aiStage(e.message, { state: 'error' });
+      throw e;
+    }
+    prog.done(2, `${(Array.isArray(out?.changes) ? out.changes : []).length} proposals`);
+    prog.start(3, 'Numbers, skills, names, locked lines');
     const res = JobBidATS.validateChanges(out, { model, analysis, report, sections: sel, targets, kind: doc.kind, fits: doc.fits });
-    aiStage(`${res.changes.length} change${res.changes.length === 1 ? '' : 's'} proposed`, { state: 'done' });
+    const flagged = res.changes.filter((c) => !c.safe).length;
+    prog.done(3, `${res.changes.length - flagged} passed · ${flagged} flagged · ${res.dropped.length} thrown away`);
+    prog.finish(`${res.changes.length} changes`);
     return { ...res, kind: doc.kind };
-  } catch (e) {
-    aiStage(e.message, { state: 'error' });
-    throw e;
-  }
+  });
 }
 
 // Writes the accepted changes into the file, reads the new file back and scores it the same way. The bytes
 // returned are exactly the ones scored, and they are what gets downloaded or attached.
 async function atsBuild({ profile, resumeId, file, job, changes = [], mode = 'keep', targets = [], history = [] }) {
-  const analysis = await atsJobAnalysis(job, {});
-  const src = await atsSource(profile, resumeId, file);
-  const base = await atsRead(src, analysis);
-  if (!changes.length) throw new Error('No change accepted');
-  aiStage('Writing the new resume and scoring it again...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
-  try {
-    const built = await base.doc.build(changes, base.doc.kind === 'pdf' ? mode : 'keep', base.model);
+  return atsRun('build', ['Read the current resume', 'Write the changes into the file', 'Read the new file back', 'Score it again', 'Check keywords and changes'], async (prog) => {
+    if (!changes.length) throw new Error('No change accepted');
+    const analysis = await atsJobAnalysis(job, {});
+    prog.start(0);
+    const src = await atsSource(profile, resumeId, file);
+    const base = await atsRead(src, analysis);
+    prog.done(0, `${src.name} · ${base.report.score}/100`);
+    const pdfMode = base.doc.kind === 'pdf' ? mode : 'keep';
+    prog.start(1, base.doc.kind === 'docx' ? 'Word: same styles, Word reflows the pages' : pdfMode === 'rebuild' ? 'PDF: clean one-column layout' : 'PDF: original pages, lines that fit');
+    const built = await base.doc.build(changes, pdfMode, base.model);
     const leftIds = new Set(built.left.map((c) => c.cid));
     const applied = changes.filter((c) => !leftIds.has(c.cid));
     if (!applied.length) throw new Error(`None of the changes could be written into this file: ${built.left[0]?.why || ''}`);
+    prog.done(1, `${applied.length} written${built.left.length ? ` · ${built.left.length} left out` : ''}`);
+    prog.start(2);
     const outFile = { name: src.name, type: base.doc.type, data: rdB64(built.bytes) };
-    const after = await atsRead(outFile, analysis);
-    const verify = JobBidATS.verify({ before: base.report, after: after.report, beforeModel: base.model, afterModel: after.model, targets, changes: applied });
+    const outDoc = await rdOpen(outFile);
+    const outModel = JobBidATS.buildModel(outDoc.lines, outDoc.meta);
+    prog.done(2, `${outModel.lines.length} lines, ${outModel.words} words${outDoc.meta.pages ? ` · ${outDoc.meta.pages} page${outDoc.meta.pages === 1 ? '' : 's'}` : ''}`);
+    prog.start(3);
+    const afterReport = JobBidATS.score(outModel, analysis, await atsWeights());
+    prog.done(3, `${base.report.score} → ${afterReport.score}`);
+    prog.start(4);
+    const verify = JobBidATS.verify({ before: base.report, after: afterReport, beforeModel: base.model, afterModel: outModel, targets, changes: applied });
     // Scores of every pass so far (the panel sends the earlier ones): the start, then each result.
     const hist = history.filter((n) => typeof n === 'number');
     if (hist[hist.length - 1] !== base.report.score) hist.push(base.report.score);
-    hist.push(after.report.score);
-    const next = JobBidATS.nextStep(after.report, hist, targets.map((t) => t.term));
-    aiStage(`New resume scored: ${base.report.score} -> ${after.report.score}`, { state: 'done' });
+    hist.push(afterReport.score);
+    const next = JobBidATS.nextStep(afterReport, hist, targets.map((t) => t.term));
+    prog.done(4, `${verify.present.filter((x) => x.ok).length} of ${applied.length} changes found in the file · ${verify.keywords.filter((k) => k.done).length} of ${verify.keywords.length} keywords done`);
+    prog.finish(`${base.report.score} → ${afterReport.score}`);
     return {
-      file: { ...outFile, changed: applied.length, text: after.model.fullText, score: after.report.score, mode: built.mode, scoredAt: new Date().toISOString() },
-      before: base.report, after: after.report, verify, next, left: built.left, mode: built.mode, rebuilt: built.mode === 'rebuild',
-      compare: JobBidATS.compareRows(base.model, applied), finalLines: atsLines(after.model), history: hist,
+      file: { ...outFile, changed: applied.length, text: outModel.fullText, score: afterReport.score, mode: built.mode, scoredAt: new Date().toISOString() },
+      before: base.report, after: afterReport, verify, next, left: built.left, mode: built.mode, rebuilt: built.mode === 'rebuild',
+      compare: JobBidATS.compareRows(base.model, applied), finalLines: atsLines(outModel), history: hist,
     };
-  } catch (e) {
-    aiStage(e.message, { state: 'error' });
-    throw e;
-  }
+  });
 }
+
+// A finished ATS step while its tab is in the background: a Chrome notification.
+function atsNotify({ title, msg }, sender) {
+  chrome.notifications.create('ats|' + Date.now(), { type: 'basic', iconUrl: 'icons/icon128.png', title: String(title || 'JobBid').slice(0, 80), message: String(msg || '').slice(0, 250), priority: 1 }, () => void chrome.runtime.lastError);
+  if (sender?.tab?.id != null) atsNotifyTabs.set('ats', sender.tab.id);
+}
+const atsNotifyTabs = new Map();
+chrome.notifications.onClicked.addListener((id) => {
+  if (!id.startsWith('ats|')) return;
+  const tabId = atsNotifyTabs.get('ats');
+  if (tabId != null) chrome.tabs.update(tabId, { active: true }).then((t) => chrome.windows.update(t.windowId, { focused: true })).catch(() => {});
+  chrome.notifications.clear(id);
+});
 
 // ---------- The JobBid icon ----------
 // Opens JobBid's panel on the page (left side, can be dragged). Chrome's own pages can't show it,
@@ -1496,6 +1574,9 @@ async function handle(msg, sender) {
       return { result: await atsOptimize(msg) };
     case 'atsBuild':
       return { result: await atsBuild(msg) };
+    case 'atsNotify':
+      atsNotify(msg, sender);
+      return {};
     case 'atsWeights':
       if (msg.set || msg.reset) await chrome.storage.local.set({ atsWeights: msg.reset ? {} : msg.set });
       return { weights: await atsWeights(), defaults: JobBidATS.DEFAULT_WEIGHTS, labels: JobBidATS.WEIGHT_LABELS };
