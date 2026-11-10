@@ -54,7 +54,7 @@ check('a "title <tab> dates" line is read with a space and locked', mlModel.line
 check('name and contact lines are locked', mlModel.lines.filter((l) => l.zone === 'header').every((l) => l.lock));
 const rML = ATS.score(mlModel, aML);
 const req = (r, t) => r.requirements.find((x) => x.term === t);
-check('score is 0-100 and labelled an estimate', rML.score > 0 && rML.score < 100 && rML.label === 'Estimated ATS match');
+check('score is 0-100 and labelled an estimate', rML.score > 0 && rML.score < 100 && rML.label === 'JobBid Fit Estimate');
 check('alias: "K8s" matches Kubernetes', req(rML, 'Kubernetes').status === 'matched' && req(rML, 'Kubernetes').via === 'K8s');
 check('alias: "ML" matches Machine Learning', req(rML, 'Machine Learning').status === 'matched');
 check('word forms: "statistical models" matches Statistical Modeling', req(rML, 'Statistical Modeling').status === 'matched');
@@ -66,18 +66,18 @@ check('evidence quotes the resume line', req(rML, 'Kubernetes').evidence[0].text
 check('missing: Snowflake', req(rML, 'Snowflake').status === 'missing');
 check('responsibility matched from a bullet ("Deployed models to production")', req(rML, 'deploy models to production').status === 'matched');
 check('years from the dates (Jun 2015 - now, about 11)', rML.years.have >= 10 && rML.years.have <= 12, String(rML.years.have));
-const qual = rML.components.find((c) => c.key === 'qualifications');
+const qual = rML.components.find((c) => c.key === 'education');
 check('missing qualification: master\'s asked, bachelor\'s shown', qual && qual.points < qual.max && qual.deductions.some((d) => /master/.test(d.text)));
 check('every lost point is explained', rML.components.every((c) => c.points >= c.max - 0.2 || c.deductions.length));
 check('components add up to the score', Math.abs(rML.components.reduce((s, c) => s + c.points, 0) - rML.score) < 0.15);
 check('same file, same score', ATS.score(ATS.buildModel(mlDoc.lines, mlDoc.meta), aML).score === rML.score);
-check('weights can be changed', ATS.score(mlModel, aML, { keywords: 80 }).components.find((c) => c.key === 'keywords').max > rML.components.find((c) => c.key === 'keywords').max);
+check('weights can be changed', ATS.score(mlModel, aML, { required: 80 }).components.find((c) => c.key === 'required').max > rML.components.find((c) => c.key === 'required').max);
 
 section('Repeating a keyword does not add points');
 const repeated = RESUME_ML.map((p) => (p.text?.startsWith('Maintained a Java') ? { ...p, text: 'Maintained a Java billing service with Python, Python and Python tooling in Python.' } : p));
 const repModel = ATS.buildModel((await rdOpen(fileOf(makeDocx(repeated), 'r.docx', DOCX))).lines, {});
 const rRep = ATS.score(repModel, aML);
-check('keyword coverage is the same with Python written 5 more times', rRep.components.find((c) => c.key === 'keywords').points === rML.components.find((c) => c.key === 'keywords').points);
+check('keyword coverage is the same with Python written 5 more times', rRep.components.find((c) => c.key === 'required').points === rML.components.find((c) => c.key === 'required').points);
 const stuffed = RESUME_ML.concat(Array.from({ length: 8 }, () => ({ li: true, text: 'Used Docker daily.' })));
 const rStuff = ATS.score(ATS.buildModel((await rdOpen(fileOf(makeDocx(stuffed), 's.docx', DOCX))).lines, {}), aML);
 check('the same keyword 7+ times is flagged as stuffing', rStuff.warnings.some((w) => /stuffing/.test(w)));
@@ -90,16 +90,16 @@ const dataResume = [{ name: true, text: 'Sam Lee' }, { text: 'sam@example.com | 
 const rData = ATS.score(ATS.buildModel((await rdOpen(fileOf(makeDocx(dataResume), 'd.docx', DOCX))).lines, {}), aData);
 check('alias "experimentation" matches A/B testing', req(rData, 'A/B testing').status === 'matched');
 check('Looker missing but Tableau related: partial', req(rData, 'Looker').status === 'partial');
-check('bachelor\'s asked and shown: no degree deduction', !rData.components.find((c) => c.key === 'qualifications')?.deductions.length);
-check('years: about 4.7 vs 3 asked: full points', rData.components.find((c) => c.key === 'years').points === rData.components.find((c) => c.key === 'years').max);
+check('bachelor\'s asked and shown: no degree deduction', !rData.components.find((c) => c.key === 'education')?.deductions.length);
+check('years: about 4.7 vs 3 asked: no years deduction', !rData.components.find((c) => c.key === 'experience').deductions.some((d) => /years/.test(d.text)));
 const aDev = ATS.validateAnalysis(AI_DEVOPS, JOB_DEVOPS);
 const devResume = [{ name: true, text: 'Jo Park' }, { text: 'jo@example.com' }, { h: true, text: 'Work Experience' }, { tab: ['DevOps Engineer, Cloudy Co', '2021 - 2023'] },
   { li: true, text: 'Automated infrastructure with Terraform on Amazon Web Services.' }, { h: true, text: 'Education' }, { text: 'BS Computer Science' }];
 const rDev = ATS.score(ATS.buildModel((await rdOpen(fileOf(makeDocx(devResume, { table: true }), 'v.docx', DOCX))).lines, (await rdOpen(fileOf(makeDocx(devResume, { table: true }), 'v.docx', DOCX))).meta), aDev);
 check('"Amazon Web Services" matches AWS', req(rDev, 'AWS').status === 'matched');
-check('missing certification lowers qualifications', rDev.components.find((c) => c.key === 'qualifications').deductions.some((d) => /Certified/.test(d.text)));
-check('years short: 2021-2023 vs 4 asked', rDev.components.find((c) => c.key === 'years').points < rDev.components.find((c) => c.key === 'years').max);
-check('a table is a formatting warning', rDev.warnings.some((w) => /Tables/.test(w)));
+check('missing certification lowers qualifications', rDev.components.find((c) => c.key === 'education').deductions.some((d) => /Certified/.test(d.text)));
+check('years short: 2021-2023 vs 4 asked', rDev.components.find((c) => c.key === 'experience').deductions.some((d) => /4\+ years/.test(d.text)));
+check('a table is a formatting warning', rDev.warnings.some((w) => /table/i.test(w)));
 check('no Skills heading is a formatting warning', rDev.warnings.some((w) => /Skills/.test(w)));
 
 section('Optimizer: proposed changes are checked');
@@ -152,7 +152,7 @@ check('Snowflake (refused) is still missing', req(after, 'Snowflake').status ===
 const ver = ATS.verify({ before: rML, after, beforeModel: mlModel, afterModel: outModel, targets, changes: accepted });
 check('verification: Docker done, PyTorch done', ver.keywords.find((k) => k.term === 'Docker').done && ver.keywords.find((k) => k.term === 'PyTorch').done);
 check('verification: every accepted change is in the file', ver.present.every((p) => p.ok), JSON.stringify(ver.present));
-check('the change is explained', ver.explain.length >= 2 && ver.explain.some((e) => /Keyword coverage/.test(e)));
+check('the change is explained', ver.explain.length >= 2 && ver.explain.some((e) => /Required skills|Preferred skills|Relevant work experience/.test(e)));
 const nx = ATS.nextStep(after, [rML.score, after.score], targets.map((t) => t.term));
 check('what is left is listed as needing experience', nx.needExperience.includes('Snowflake'));
 check('a pass that gained under 1 point stops the loop', ATS.nextStep(after, [70, 70.4], []).canContinue === false);
@@ -231,7 +231,7 @@ const chipResume = [{ name: true, text: 'Sam Doe' }, { text: 'Senior Software En
 const chipModel = ATS.buildModel((await rdOpen(fileOf(makeDocx(chipResume), 'c.docx', DOCX))).lines, {});
 const rChip = ATS.score(chipModel, aChip);
 const tChip = rChip.components.find((c) => c.key === 'title');
-check('a title the AI only called similar ("AI Engineer") gets at most 70%', tChip.points <= tChip.max * 0.7 + 0.05, `${tChip.points}/${tChip.max}`);
+check('a title the AI only called similar ("AI Engineer") gets at most 70%', rChip.title.pct <= 70, `${rChip.title.pct}%`);
 const exactResume = chipResume.map((p) => (p.text === 'Senior Software Engineer / AI Engineer' ? { text: 'Senior AI Systems Engineer, Chip Design' } : p));
 const exactDoc = await rdOpen(fileOf(makeDocx(exactResume), 'c.docx', DOCX));
 const exact = ATS.score(ATS.buildModel(exactDoc.lines, {}), aChip);
@@ -239,12 +239,12 @@ check('the job\'s own title gets full points', exact.components.find((c) => c.ke
 const iChip = rChip.components.find((c) => c.key === 'industry');
 check('industry part: AI shown, Semiconductor and Hardware missing', iChip && iChip.points < iChip.max * 0.5 && iChip.deductions.some((d) => /Semiconductor/.test(d.text)) && iChip.deductions.some((d) => /Hardware/.test(d.text)),
   iChip && `${iChip.points}/${iChip.max} ${iChip.deductions.map((d) => d.text).join(' | ')}`);
-check('industry terms are not counted twice (not in keyword coverage)', !rChip.components.find((c) => c.key === 'keywords').deductions.some((d) => /Semiconductor/.test(d.text)));
+check('industry terms are not counted twice (not in keyword coverage)', !rChip.components.find((c) => c.key === 'required').deductions.some((d) => /Semiconductor/.test(d.text)));
 
 section('More checks');
 check('PDF: the title line is found even when it runs into the contact line', pRep.components.find((c) => c.key === 'title').points >= rML.components.find((c) => c.key === 'title').points - 0.5,
   `${pRep.components.find((c) => c.key === 'title').points}`);
-const q = rDev.components.find((c) => c.key === 'qualifications');
+const q = rDev.components.find((c) => c.key === 'education');
 check('a missing preferred certificate costs about half the education points, not all', q.points > q.max * 0.3 && q.points < q.max * 0.7, `${q.points}/${q.max}`);
 const rows = ATS.compareRows(mlModel, accepted);
 check('comparison: changed, added and removed rows', rows.some((r) => r.kind === 'changed') && rows.some((r) => r.kind === 'added' && /Packaged ranking/.test(r.b)) && rows.some((r) => r.kind === 'removed' && /Java billing/.test(r.a)));

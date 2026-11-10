@@ -4,14 +4,15 @@
 // Works in the service worker (importScripts) and in Node (tests): everything is on self.JobBidATS.
 
 (function (root) {
-  // 2: the job's industries are read too (a job read with version 1 is read again).
-  const VERSION = 2;
-  // Points out of 100 for each part of the score (configurable: chrome.storage.local "atsWeights").
-  // A part the job doesn't ask about (no degree, no years) is left out and the others are scaled up.
-  const DEFAULT_WEIGHTS = { keywords: 35, demonstrated: 15, responsibilities: 10, industry: 10, title: 10, years: 8, qualifications: 6, readability: 6 };
+  // 3: requirement types, quotes from the posting, the AI's evidence review (jobs read before are read again).
+  const VERSION = 3;
+  // JobBid Fit Estimate: points out of 100 for each part (configurable: chrome.storage.local "atsWeights").
+  // These are starting defaults, not validated ATS weights. A part the job doesn't ask about (no preferred
+  // skills, no education) is left out and the others are scaled up to 100.
+  const DEFAULT_WEIGHTS = { required: 35, experience: 20, responsibilities: 15, industry: 10, title: 10, preferred: 5, education: 5 };
   const WEIGHT_LABELS = {
-    keywords: 'Keyword coverage', demonstrated: 'Skills shown in experience', responsibilities: 'Relevant experience', industry: 'Industry experience',
-    title: 'Job title alignment', years: 'Years of experience', qualifications: 'Education & certifications', readability: 'ATS readability',
+    required: 'Required skills', experience: 'Relevant work experience', responsibilities: 'Responsibilities', industry: 'Industry / domain',
+    title: 'Job title & seniority', preferred: 'Preferred skills', education: 'Education & certifications',
   };
   const IMPORTANCE = { required: 3, preferred: 1.5, optional: 0.75 };
   const CATEGORIES = ['skill', 'tool', 'domain', 'responsibility', 'qualification', 'certification', 'soft'];
@@ -127,22 +128,24 @@
   // ---------- The job's requirements (AI, then checked) ----------
 
   function analysisPrompt(job) {
-    return `You are an ATS (applicant tracking system) configuration expert. Read this job posting and list what a resume is screened for.
+    return `You are an expert recruiter configuring an applicant tracking system. Read this job posting and list what a resume is screened for.
 Return ONLY JSON:
 {"titleAliases": ["other titles for the same role"],
- "industries": [{"term": "industry or business area of this job and company, as the posting words it", "related": ["neighbouring industries"]}],
+ "seniority": "intern|junior|mid|senior|staff|principal|lead|manager|director|",
  "yearsRequired": number or null,
- "degree": {"level": "associate|bachelor|master|phd|", "fields": ["field of study"], "required": true|false},
- "requirements": [{"term": "exact wording from the posting", "aliases": ["abbreviations and exact equivalents"], "related": ["related but different skills"],
-   "category": "skill|tool|domain|responsibility|qualification|certification|soft", "importance": "required|preferred|optional"}]}
+ "degree": {"level": "associate|bachelor|master|phd|", "fields": ["field of study"], "required": true|false} or null,
+ "industries": [{"term": "industry or business area, as the posting words it", "related": ["neighbouring industries"]}],
+ "requirements": [{"term": "short standard name", "aliases": ["exact equivalents"], "related": ["related but different"],
+   "kind": "required_skill|preferred_skill|nice_to_have|responsibility|domain|education|certification|soft_skill",
+   "hard": false, "quote": "the posting's own words it comes from (up to 15 words, copied exactly)"}]}
 Rules:
-- 15 to 40 requirements. Use the posting's own words for "term" (keep multi-word skills whole: "Predictive Modeling", "Statistical Analysis", "Machine Learning").
-- Split lists: "AWS, GCP or Azure" is three requirements. Merge duplicates.
-- "aliases" are only true equivalents a recruiter accepts as the same thing: abbreviations ("ML" for "Machine Learning", "K8s" for "Kubernetes"), spellings ("PostgreSQL"/"Postgres"). Never put a different tool there.
-- "related" are neighbouring skills that show something but are not the same ("TensorFlow" for "PyTorch").
-- "importance": required = must-have / minimum qualification / core of the role; preferred = nice to have / bonus / preferred; optional = mentioned in passing.
-- "domain" = industry or business area terms (e.g. "Healthcare", "Claims"); "responsibility" = a short phrase for a main duty (e.g. "deploy models to production"); "certification" = a named certificate or license.
-- "industries": 2 to 8 industries / business areas the posting names for this role or company (e.g. "Semiconductor", "Hardware", "Healthcare", "Fintech"), only ones its text names.
+- 10 to 35 requirements, each ONE thing. "term" is a short standard name of 1-5 words ("A/B Testing", "Statistical Modeling", "Large Language Models", "Recommendation Systems", "Model Evaluation"), never a sentence fragment. A phrase like "tested, reusable code" is a soft_skill or responsibility with a name like "Writing Tested, Reusable Code".
+- One requirement per skill: merge synonyms and repeats ("Large Language Models" with aliases ["LLM", "LLMs"]; "PostgreSQL" with ["Postgres"]). Split lists ("AWS, GCP or Azure" are three).
+- "aliases": only true equivalents (abbreviations, spellings). "related": neighbouring skills that are NOT the same ("TensorFlow" for PyTorch). Never put a different tool in "aliases".
+- "kind": required_skill = a must-have technical skill or tool; preferred_skill = listed as preferred / nice to have / bonus; nice_to_have = mentioned in passing; responsibility = a main duty as a short phrase ("Build ranking models"); domain = industry or business area; education = degree or field; certification = a named certificate or license; soft_skill = communication, collaboration, ownership...
+- "hard": true only for real eligibility gates: work authorization, security clearance, a license, a degree stated as mandatory.
+- Years of experience and seniority go in "yearsRequired" / "seniority", not in "requirements".
+- "industries": 1 to 8, only ones the posting's text names.
 - Leave out benefits, company boilerplate, location, salary, equal-opportunity text.
 
 JOB TITLE: ${job.title || ''}
@@ -189,6 +192,9 @@ ${clean(job.description).slice(0, 9000)}`;
     return [];
   }
   const word = (v) => String(v || '').toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+  // Requirement type -> [category, importance]; null = not a requirement (years / seniority are read apart).
+  const KINDS = { required_skill: ['skill', 'required'], preferred_skill: ['skill', 'preferred'], nice_to_have: ['skill', 'optional'], responsibility: ['responsibility', ''],
+    domain: ['domain', ''], industry: ['domain', ''], education: ['qualification', ''], certification: ['certification', ''], soft_skill: ['soft', ''], seniority: null, years: null, experience_years: null };
   const normImportance = (v) => {
     const t = word(v);
     if (/required|must|mandatory|minimum|basic|core|essential|critical|high/.test(t)) return 'required';
@@ -215,6 +221,15 @@ ${clean(job.description).slice(0, 9000)}`;
     const inJd = (t) => { const f = stems(t); return f.length > 0 && phraseAt(jdStems, f) >= 0; };
     // Most of a multi-word term's words in one sentence of the posting ("statistical modeling techniques").
     const nearJd = (t) => { const c = [...new Set(stems(t).filter((w) => !STOP.has(w)))]; return c.length >= 2 && jdSentences.some((s) => c.filter((w) => s.includes(w)).length / c.length >= 0.75); };
+    // The quote must be the posting's words: found as they are, or almost all of its words in one sentence.
+    const jdFlat = ' ' + flat(`${job.title || ''} ${job.description || ''}`) + ' ';
+    const quoteInJd = (q) => {
+      const f = flat(q);
+      if (f.length < 3) return false;
+      if (jdFlat.includes(' ' + f + ' ') || jdFlat.includes(f)) return true;
+      const w = [...new Set(stems(q).filter((x) => !STOP.has(x)))];
+      return w.length >= 3 && jdSentences.some((s) => w.filter((x) => s.includes(x)).length / w.length >= 0.85);
+    };
     const reqs = [];
     const list = requirementList(out);
     let dropped = 0;
@@ -224,6 +239,8 @@ ${clean(job.description).slice(0, 9000)}`;
       const same = reqs.find((x) => [x.term, ...x.aliases].some((t) => stems(t).join(' ') === key) || [r.term, ...r.aliases].some((t) => stems(t).join(' ') === stems(x.term).join(' ')));
       if (!same) return reqs.push(r);
       if (IMPORTANCE[r.importance] > IMPORTANCE[same.importance]) same.importance = r.importance;
+      same.hard = same.hard || r.hard;
+      if (!same.quote && r.quote) same.quote = r.quote;
       for (const a of r.aliases) if (!same.aliases.includes(a) && a.toLowerCase() !== same.term.toLowerCase()) same.aliases.push(a);
     };
     for (const raw0 of list) {
@@ -231,8 +248,16 @@ ${clean(job.description).slice(0, 9000)}`;
       if (!raw || typeof raw !== 'object') continue;
       let term = clean(raw.term || raw.k || raw.name || raw.keyword || raw.skill || raw.requirement || raw.text || raw.title || raw.label).replace(/^[-•*\s]+|[.:;]+$/g, '');
       if (term.length < 1 || term.length > 90) { dropped++; continue; }
-      const category = normCategory(raw.category || raw.type || raw.kind);
-      const importance = normImportance(raw.importance || raw.priority || raw.level || (raw.required === true ? 'required' : raw.required === false ? 'preferred' : ''));
+      let category = normCategory(raw.category || raw.type || raw.kind);
+      let importance = normImportance(raw.importance || raw.priority || raw.level || (raw.required === true ? 'required' : raw.required === false ? 'preferred' : ''));
+      // The requirement type ("kind") decides category and importance.
+      const kind = word(raw.kind).replace(/ /g, '_');
+      const k = KINDS[kind];
+      if (k === null) { dropped++; continue; } // years / seniority: read separately
+      if (k) { category = k[0]; importance = k[1] || (raw.importance ? importance : kind === 'responsibility' ? 'required' : kind === 'certification' ? (raw.hard ? 'required' : 'preferred') : 'preferred'); }
+      const quote = clean(raw.quote || raw.evidence || raw.source).slice(0, 200);
+      const quoted = quoteInJd(quote);
+      const hard = raw.hard === true || raw.hard === 'true';
       let aliases = strs(raw.aliases || raw.synonyms || raw.equivalents, 8, 40);
       const related = strs(raw.related || raw.relatedSkills, 6, 40);
       // "AWS (Amazon Web Services)": both names are the same thing.
@@ -241,16 +266,17 @@ ${clean(job.description).slice(0, 9000)}`;
       aliases = [...new Set(aliases.filter((a) => a.toLowerCase() !== term.toLowerCase()))];
       if (category === 'responsibility') {
         const c = stems(term).filter((w) => !STOP.has(w));
-        if (c.length && jdSentences.some((s) => c.filter((w) => s.includes(w)).length / c.length >= 0.6)) add({ term, aliases, related, category, importance });
+        if (quoted || (c.length && jdSentences.some((s) => c.filter((w) => s.includes(w)).length / c.length >= 0.6))) add({ term, aliases, related, category, importance, quote: quoted ? quote : '', hard });
         else { dropped++; droppedTerms.push(term); }
         continue;
       }
-      if ([term, ...aliases].some(inJd)) { add({ term, aliases, related, category, importance }); continue; }
+      if ([term, ...aliases].some(inJd)) { add({ term, aliases, related, category, importance, quote: quoted ? quote : '', hard }); continue; }
       // "AWS / GCP / Azure", "Python or Go": each part the posting names is its own requirement.
       const parts = term.split(/\s*(?:\/|,|\bor\b|\band\b|&)\s*/i).map((x) => x.trim()).filter((x) => x.length >= 1);
       const hits = parts.length > 1 ? parts.filter(inJd) : [];
-      if (hits.length) { for (const h of hits) add({ term: h, aliases: [], related, category, importance }); continue; }
-      if (nearJd(term)) { add({ term, aliases, related, category, importance }); continue; }
+      if (hits.length) { for (const h of hits) add({ term: h, aliases: [], related, category, importance, quote: quoted ? quote : '', hard }); continue; }
+      // A short standard name ("Model Evaluation") for words the posting has ("model-performance measurement").
+      if (nearJd(term) || quoted) { add({ term, aliases, related, category, importance, quote: quoted ? quote : '', hard }); continue; }
       dropped++;
       droppedTerms.push(term);
     }
@@ -273,9 +299,11 @@ ${clean(job.description).slice(0, 9000)}`;
     const dg = src.degree && typeof src.degree === 'object' ? src.degree : {};
     const level = ['associate', 'bachelor', 'master', 'phd'].includes(String(dg.level || '').toLowerCase()) ? String(dg.level).toLowerCase() : '';
     const degreeSaid = /\b(degree|bachelor|master|ph\.?\s?d|b\.?s\.?|m\.?s\.?|bs\/ms|diploma)\b/i.test(job.description || '');
+    const sen = word(src.seniority);
     return {
-      version: VERSION, title: clean(job.title), company: clean(job.company),
+      version: VERSION, mode: 'ai', title: clean(job.title), company: clean(job.company),
       titleAliases: strs(src.titleAliases, 5, 60),
+      seniority: /^(intern|junior|mid|senior|staff|principal|lead|manager|director)$/.test(sen) ? sen : '',
       yearsRequired: years ?? null,
       degree: level && degreeSaid ? { level, fields: strs(dg.fields, 6, 50), required: dg.required !== false } : null,
       requirements, dropped, droppedTerms: droppedTerms.slice(0, 8), received: list.length, at: new Date().toISOString(),
@@ -402,83 +430,286 @@ ${clean(job.description).slice(0, 9000)}`;
     return { level: best, line, lines: edu };
   }
 
-  function readability(model) {
-    const m = model.meta || {};
-    const out = [];
-    const add = (lost, text) => out.push({ lost, text });
-    if (model.words < 120) add(0.6, `Very little readable text (${model.words} words): an ATS may see an almost empty resume (scanned image or unusual font?)`);
-    if (m.unreadable > 0.05) add(Math.min(0.4, m.unreadable), `${Math.round(m.unreadable * 100)}% of the text can't be read as letters (a font without a text map)`);
-    const zones = new Set(model.lines.filter((l) => l.kind === 'heading').map((l) => l.section));
-    if (!zones.has('experience')) add(0.2, 'No standard "Experience" heading: the ATS may not find the work history');
-    if (!zones.has('education')) add(0.08, 'No "Education" heading');
-    if (!zones.has('skills')) add(0.1, 'No "Skills" heading: a skills section is where an ATS looks first');
-    if (!EMAIL_RE.test(model.fullText)) add(0.12, 'No email address in the readable text');
-    if (!PHONE_RE.test(model.fullText)) add(0.05, 'No phone number in the readable text');
-    if (m.headerContact) add(0.1, 'Contact details are in the Word page header: some ATS skip page headers');
-    if (m.tables) add(0.1, 'Tables: some ATS read table cells out of order');
-    if (m.textboxes) add(0.15, 'Text boxes: many ATS skip text inside text boxes');
-    if (m.columns) add(0.15, 'Two-column layout: an ATS may mix the columns together');
-    if (model.words > 1300) add(0.1, `Long resume (${model.words} words)`);
-    // The same requirement written over and over reads as keyword stuffing.
-    if (m.stuffed?.length) add(Math.min(0.3, 0.1 * m.stuffed.length), `Repeated many times (keyword stuffing): ${m.stuffed.slice(0, 4).join(', ')}`);
-    const lost = Math.min(1, out.reduce((s, x) => s + x.lost, 0));
-    return { credit: 1 - lost, deductions: out };
-  }
+  // ---------- Candidate evidence: the resume file, the profile, or both ----------
 
-  function score(model, analysis, weightsIn) {
-    const weights = { ...DEFAULT_WEIGHTS, ...(weightsIn || {}) };
-    for (const k of Object.keys(weights)) weights[k] = Math.max(0, Number(weights[k]) || 0);
-    const reqs = analysis.requirements.map((r) => ({ r, m: matchRequirement(r, model.lines) }));
-    const rows = reqs.map(({ r, m }) => ({ id: r.id, term: r.term, category: r.category, importance: r.importance, weight: r.weight, aliases: r.aliases, related: r.related,
-      status: m.status, demonstrated: m.demonstrated, evidence: m.evidence, via: m.via, mentions: m.mentions || 0 }));
-    // Keyword stuffing: one requirement written 7+ times.
-    model.meta = { ...(model.meta || {}), stuffed: rows.filter((x) => x.mentions >= 7).map((x) => x.term) };
-    const comps = [];
-    const credit = { matched: 1, partial: 0.4, missing: 0 };
-    const sumW = (list) => list.reduce((s, x) => s + x.weight, 0);
-    const kw = rows.filter((x) => KEYWORD_CATS.has(x.category));
-    if (kw.length) {
-      const W = sumW(kw);
-      comps.push({ key: 'keywords', credit: kw.reduce((s, x) => s + x.weight * credit[x.status], 0) / W,
-        deductions: kw.filter((x) => x.status !== 'matched').map((x) => ({ lost: (x.weight * (1 - credit[x.status])) / W, text: x.status === 'partial' ? `"${x.term}" (${x.importance}) only partly matched${x.via ? ` - the resume has "${x.via}", a related skill` : ''}` : `"${x.term}" (${x.importance}) is missing` })),
-        detail: `${kw.filter((x) => x.status === 'matched').length} of ${kw.length} keywords matched, ${kw.filter((x) => x.status === 'partial').length} partly` });
-      // Shown in work: a skill named in a job or project counts more than one only listed under Skills.
-      const core = kw.filter((x) => x.importance !== 'optional' && x.category !== 'soft');
-      if (core.length) {
-        const CW = sumW(core);
-        const d = (x) => (x.status === 'matched' ? (x.demonstrated ? 1 : 0.25) : x.status === 'partial' && x.demonstrated ? 0.2 : 0);
-        comps.push({ key: 'demonstrated', credit: core.reduce((s, x) => s + x.weight * d(x), 0) / CW,
-          deductions: core.filter((x) => d(x) < 1 && x.status !== 'missing').map((x) => ({ lost: (x.weight * (1 - d(x))) / CW, text: x.status === 'matched' ? `"${x.term}" is only listed, not shown in work experience or projects` : `"${x.term}" is not shown in work experience` }))
-            .concat(core.filter((x) => x.status === 'missing').length ? [{ lost: core.filter((x) => x.status === 'missing').reduce((s, x) => s + x.weight, 0) / CW, text: `${core.filter((x) => x.status === 'missing').length} missing skills are not shown anywhere` }] : []),
-          detail: `${core.filter((x) => x.status === 'matched' && x.demonstrated).length} of ${core.length} main skills shown in work experience` });
+  // Profile lines get ids from 100000 up, so they never clash with the resume's line ids.
+  const PROFILE_ID = 100000;
+  function profileRawLines(p) {
+    const raw = [];
+    let n = 0;
+    const push = (text, extra = {}) => { const t = clean(text); if (t) raw.push({ id: PROFILE_ID + n++, text: t, ...extra }); };
+    push(p.fullName || [p.firstName, p.lastName].filter(Boolean).join(' '));
+    push([p.headline, p.currentTitle && p.currentTitle !== p.headline ? p.currentTitle : ''].filter(Boolean).join(' | '));
+    push([p.email, p.phone].filter(Boolean).join(' · '));
+    if (p.summary) { push('Summary', { strong: true }); push(p.summary); }
+    const skills = Array.isArray(p.skills) ? p.skills : typeof p.skills === 'string' ? p.skills.split(/\s*[,;]\s*/) : [];
+    if (skills.length) { push('Skills', { strong: true }); push(skills.join(', ')); }
+    const exp = Array.isArray(p.experience) ? p.experience : [];
+    if (exp.length) {
+      push('Experience', { strong: true });
+      for (const e of exp) {
+        push(`${[e.title, e.company].filter(Boolean).join(', ')} ${e.start || ''}${e.start || e.end ? ' - ' : ''}${e.end || (e.start ? 'Present' : '')}`);
+        for (const d of String(e.description || '').split(/\n+|\s*[•●▪]\s+|(?<=\.)\s+(?=[A-Z])/)) push(d.replace(/^[-*]\s+/, ''), { bullet: true });
       }
     }
-    const resp = rows.filter((x) => x.category === 'responsibility');
-    if (resp.length) {
-      const W = sumW(resp);
-      comps.push({ key: 'responsibilities', credit: resp.reduce((s, x) => s + x.weight * credit[x.status], 0) / W,
-        deductions: resp.filter((x) => x.status !== 'matched').map((x) => ({ lost: (x.weight * (1 - credit[x.status])) / W, text: `${x.status === 'partial' ? 'Partly shown' : 'Not shown'}: "${x.term}"` })),
-        detail: `${resp.filter((x) => x.status === 'matched').length} of ${resp.length} main duties shown in experience` });
+    const edu = Array.isArray(p.education) ? p.education : [];
+    if (edu.length) { push('Education', { strong: true }); for (const e of edu) push([[e.degree, e.field].filter(Boolean).join(' in '), e.school, e.end || e.start].filter(Boolean).join(', ')); }
+    const certs = Array.isArray(p.certifications) ? p.certifications : typeof p.certifications === 'string' ? p.certifications.split(/\s*[,;\n]\s*/) : [];
+    if (certs.length) { push('Certifications', { strong: true }); for (const c of certs) push(typeof c === 'string' ? c : c?.name); }
+    return raw;
+  }
+  function buildProfileModel(p) {
+    const m = buildModel(profileRawLines(p || {}), { profile: true });
+    for (const l of m.lines) { l.source = 'profile'; l.editable = false; l.lock = l.lock || 'profile field (change it in the dashboard)'; }
+    const stated = Number(String(p?.yearsExperience ?? '').match(/\d+(\.\d+)?/)?.[0]);
+    m.statedYears = stated >= 0.5 && stated <= 50 ? stated : null;
+    return m;
+  }
+  // The evidence the score is based on: only the chosen source(s), never one silently swapped for the other.
+  function combineEvidence(resumeModel, profileModel, source) {
+    if (resumeModel) for (const l of resumeModel.lines) l.source = l.source || 'resume';
+    if (source === 'profile' || !resumeModel) return { ...profileModel, source: 'profile', resume: null, profile: profileModel };
+    if (source === 'resume' || !profileModel) return { ...resumeModel, source: 'resume', resume: resumeModel, profile: profileModel || null };
+    const lines = [...resumeModel.lines, ...profileModel.lines];
+    return { lines, meta: resumeModel.meta, fullText: lines.map((l) => l.text).join('\n'), words: resumeModel.words, sections: [...new Set(lines.map((l) => l.zone))], source: 'both', resume: resumeModel, profile: profileModel };
+  }
+
+  // Years: from the dates, and what the text states ("9+ years"), per source. Nothing is inferred beyond them.
+  function yearsFacts(model) {
+    if (!model) return { dates: null, stated: null };
+    const y = resumeYears({ ...model, lines: model.lines.filter((l) => l.zone !== 'header' || !/\byears?\b/i.test(l.text)) });
+    const stated = model.lines.filter((l) => l.zone === 'summary' || l.zone === 'header')
+      .map((l) => l.text.match(/\b(\d{1,2})\s*(\+?)\s*(?:years?|yrs)\b/i)).filter(Boolean).map((m) => ({ n: Number(m[1]), plus: !!m[2] })).filter((x) => x.n >= 1 && x.n <= 45)
+      .sort((a, b) => b.n - a.n);
+    // "9+ years" is a minimum: dates of 10.5 years agree with it.
+    return { dates: y.from === 'dates' ? y.years : null, stated: stated[0]?.n ?? model.statedYears ?? null, plus: stated[0]?.plus || false };
+  }
+  function yearsInfo(ev) {
+    const r = yearsFacts(ev.resume), p = yearsFacts(ev.profile);
+    const order = ev.source === 'profile' ? [['profile dates', p.dates], ['profile', p.stated]]
+      : ev.source === 'resume' ? [['resume dates', r.dates], ['resume summary', r.stated]]
+        : [['resume dates', r.dates], ['resume summary', r.stated], ['profile dates', p.dates], ['profile', p.stated]];
+    const used = order.find(([, v]) => v != null) || ['', null];
+    const all = [['resume dates', r.dates], ['resume summary', r.stated], ['profile dates', p.dates], ['profile', p.stated]].filter(([, v]) => v != null);
+    const plusOf = { 'resume summary': r.plus, profile: p.plus };
+    // Two figures disagree when they are 1.5+ years apart, unless one is a minimum ("9+") the other meets.
+    const agree = ([k1, v1], [k2, v2]) => Math.abs(v1 - v2) < 1.5 || (plusOf[k1] && v2 >= v1) || (plusOf[k2] && v1 >= v2);
+    const conflict = all.some((x, i) => all.slice(i + 1).some((y) => !agree(x, y)));
+    const say = { 'resume dates': 'the resume\'s dates show', 'resume summary': 'the resume states', 'profile dates': 'the profile\'s dates show', profile: 'the profile says' };
+    return { years: used[1], from: used[0], resume: r, profile: p, conflict,
+      note: conflict ? `${all.map(([k, v]) => `${say[k]} ${v}${plusOf[k] ? '+' : ''} years`).join(', ')}. Used: ${used[0] || 'none'}.`.replace(/^./, (c) => c.toUpperCase()) : '' };
+  }
+
+  // ---------- The AI's review of the evidence, checked line by line ----------
+
+  const MATCHES = ['direct', 'equivalent', 'related', 'none', 'contradiction'];
+  const MATCH_LABELS = { direct: 'Direct match', equivalent: 'Equivalent match', related: 'Related experience', none: 'Not demonstrated', contradiction: 'Contradiction' };
+  const CREDIT = { direct: 1, equivalent: 0.9, related: 0.35, none: 0, contradiction: 0 };
+  const KIND_LABEL = (r) => (r.category === 'responsibility' ? 'Responsibility' : r.category === 'domain' ? 'Industry / domain' : r.category === 'certification' ? 'Certification'
+    : r.category === 'qualification' ? 'Education' : r.category === 'soft' ? 'Soft skill' : r.importance === 'required' ? 'Required skill' : r.importance === 'preferred' ? 'Preferred skill' : 'Nice to have');
+
+  function reviewPrompt(analysis, model) {
+    const reqs = analysis.requirements.map((r) => `${r.id} (${KIND_LABEL(r)}${r.hard ? ', must-have' : ''}) ${r.term}${r.aliases.length ? ` [same as: ${r.aliases.join(', ')}]` : ''}${r.quote ? ` - posting: "${r.quote}"` : ''}`).join('\n');
+    const lines = model.lines.filter((l) => l.kind !== 'heading' && l.text.length > 1)
+      .map((l) => `[${l.id}] (${l.source || 'resume'} · ${l.zone}) ${l.text}`).join('\n').slice(0, 16000);
+    return `You check a job candidate's evidence against a job's requirements. Use ONLY the numbered evidence lines below; never assume anything they don't say.
+For every requirement return:
+- "status": "direct" = a line names it (or an exact equivalent word); "equivalent" = the same skill in other words (e.g. "Postgres" for PostgreSQL, "built CTR prediction models" for Predictive Modeling); "related" = relevant but not the same (a different tool, a neighbouring area); "none" = nothing shows it; "contradiction" = a line shows the opposite (e.g. the only degree is in an unrelated field when a field is required).
+- "lines": ids of the lines that show it; "quote": 3-15 words copied exactly from one of those lines.
+- "explanation": one short sentence: what the evidence shows, or what is missing.
+- "recommendation": one short sentence on how to show it better, using only what the lines say; "" when the evidence is none (do not suggest claiming it).
+Do not call related experience equivalent. Different tools (TensorFlow vs PyTorch, AWS vs Azure) are related, not equivalent.
+Also judge the professional summary for this job: "summary": {"status": "strong|adequate|weak|missing", "explanation": "...", "recommendation": "..."}.
+And up to 5 "suggestions": [{"text": "...", "lines": [ids]}] - concrete resume improvements built on real lines (e.g. "Your resume mentions statistical modeling but not how you evaluated models; add the evaluation methods you actually used").
+Never suggest adding skills, employers, projects, degrees, certifications, dates or numbers the lines don't show.
+Return ONLY JSON: {"results":[{"id":"r1","status":"direct","lines":[3],"quote":"...","explanation":"...","recommendation":"..."}],"summary":{...},"suggestions":[...]}
+
+JOB: ${analysis.title}${analysis.company ? ' at ' + analysis.company : ''}
+REQUIREMENTS:
+${reqs}
+
+EVIDENCE LINES:
+${lines}`;
+  }
+
+  const numbersIn = (s) => (String(s).match(/\d[\d,.]*%?/g) || []).map((x) => x.replace(/[,.]$/, ''));
+  // The AI's judgments, kept only where the evidence it cites is really there: a line id that exists, a quote
+  // found in the evidence. A "direct" match whose words aren't in the lines becomes "equivalent"; one with no
+  // real evidence becomes "not demonstrated". Recommendations with numbers the evidence doesn't have are dropped.
+  function validateReview(out, analysis, model) {
+    const byLine = new Map(model.lines.map((l) => [l.id, l]));
+    const flatLines = model.lines.map((l) => [l, ' ' + flat(l.text) + ' ']);
+    const evNums = new Set(numbersIn(model.fullText));
+    const okText = (t) => { const s = clean(t).slice(0, 300); return numbersIn(s).every((n) => evNums.has(n)) ? s : ''; };
+    const list = Array.isArray(out?.results) ? out.results : Array.isArray(out) ? out : requirementList(out);
+    const given = new Map();
+    for (const x of list) if (x && typeof x === 'object' && x.id != null) given.set(String(x.id), x);
+    const byId = {};
+    for (const r of analysis.requirements) {
+      const x = given.get(r.id) || given.get(r.term);
+      let match = MATCHES.includes(String(x?.status || '').toLowerCase()) ? String(x.status).toLowerCase() : 'none';
+      const notes = [];
+      if (!x) notes.push('the AI did not judge this requirement');
+      const ids = (Array.isArray(x?.lines) ? x.lines : x?.line != null ? [x.line] : []).map(Number).filter((id) => byLine.has(id) && byLine.get(id).kind !== 'heading');
+      const q = clean(x?.quote || '');
+      const fq = flat(q);
+      let quoteLine = null;
+      if (fq.length >= 3) quoteLine = (ids.map((id) => byLine.get(id)).find((l) => (' ' + flat(l.text) + ' ').includes(fq))) || flatLines.find(([, t]) => t.includes(fq))?.[0] || null;
+      const lines = [...new Set([...(quoteLine ? [quoteLine.id] : []), ...ids])].map((id) => byLine.get(id));
+      if (match !== 'none' && !lines.length) { notes.push(`the AI said "${MATCH_LABELS[match]}" but cited nothing that is in the evidence`); match = 'none'; }
+      if (match !== 'none' && q && !quoteLine && lines.length) notes.push('the AI\'s quote is not word for word in the evidence; its cited line is shown instead');
+      const own = lines.some((l) => r.forms.some((f) => phraseAt(l.stems, f) >= 0));
+      if (match === 'direct' && !own) { match = 'equivalent'; notes.push('the exact words are not in the line: counted as equivalent'); }
+      // A tool the job reading itself called related (TensorFlow for PyTorch) is never an equivalent.
+      const rel = !own && r.related.find((t) => lines.some((l) => phraseAt(l.stems, stems(t)) >= 0));
+      if ((match === 'equivalent' || match === 'direct') && rel) { match = 'related'; notes.push(`"${rel}" is a related skill, not the same one`); }
+      byId[r.id] = { match, lines: lines.map((l) => l.id), quote: quoteLine ? q : '', explanation: okText(x?.explanation), recommendation: match === 'none' ? '' : okText(x?.recommendation), note: notes.join('; ') };
     }
-    const ind = rows.filter((x) => x.category === 'domain');
-    if (ind.length) {
-      const W = sumW(ind);
-      comps.push({ key: 'industry', credit: ind.reduce((s, x) => s + x.weight * credit[x.status], 0) / W,
-        deductions: ind.filter((x) => x.status !== 'matched').map((x) => ({ lost: (x.weight * (1 - credit[x.status])) / W, text: x.status === 'partial' ? `"${x.term}" industry only partly shown${x.via ? ` (the resume has "${x.via}")` : ''}` : `No "${x.term}" industry experience in the resume` })),
-        detail: `${ind.filter((x) => x.status === 'matched').length} of ${ind.length} of the job's industries in the resume` });
+    const s = out?.summary && typeof out.summary === 'object' ? out.summary : null;
+    const summary = s ? { status: ['strong', 'adequate', 'weak', 'missing'].includes(String(s.status).toLowerCase()) ? String(s.status).toLowerCase() : 'adequate', explanation: okText(s.explanation), recommendation: okText(s.recommendation) } : null;
+    const suggestions = (Array.isArray(out?.suggestions) ? out.suggestions : []).slice(0, 6).map((g) => ({ text: okText(typeof g === 'string' ? g : g?.text), lines: (Array.isArray(g?.lines) ? g.lines : []).map(Number).filter((id) => byLine.has(id)) }))
+      .filter((g) => g.text && g.lines.length);
+    return { mode: 'ai', byId, summary, suggestions };
+  }
+  // Without the AI: the words themselves (an exact equivalent from the job reading counts as equivalent).
+  function rulesReview(analysis, model) {
+    const byId = {};
+    for (const r of analysis.requirements) {
+      const m = matchRequirement(r, model.lines);
+      const match = m.status === 'matched' ? (m.via ? 'equivalent' : 'direct') : m.status === 'partial' ? 'related' : 'none';
+      byId[r.id] = { match, lines: m.evidence.map((e) => e.lineId), quote: '', explanation: match === 'none' ? `"${r.term}" is not in the evidence` : m.via ? `Found as "${m.via}"` : match === 'related' ? 'Only a related term or part of the words was found' : 'Named in the evidence', recommendation: '', note: '' };
     }
-    const title = titleMatch(model, analysis);
-    if (title) {
-      comps.push({ key: 'title', credit: title.credit, deductions: title.credit < 0.95 ? [{ lost: 1 - title.credit, text: title.line ? `Closest title in the resume: "${title.line.slice(0, 80)}" vs "${analysis.title}"` : `No title close to "${analysis.title}"` }] : [],
-        detail: title.line ? `Closest: ${title.line.slice(0, 80)}` : 'No similar title found' });
+    return { mode: 'rules', byId, summary: null, suggestions: [] };
+  }
+  // After the resume is changed: the same judgments, moved to the new file's lines (matched by their text).
+  // A judgment whose evidence line was rewritten is kept only if its quote is still in the new text.
+  function carryReview(review, oldModel, newModel) {
+    if (!review) return null;
+    const oldById = new Map(oldModel.lines.map((l) => [l.id, l]));
+    const newByText = new Map();
+    for (const l of newModel.lines) { const k = flat(l.text); if (!newByText.has(k)) newByText.set(k, l.id); }
+    const newFlat = newModel.lines.map((l) => [l.id, ' ' + flat(l.text) + ' ']);
+    const byId = {};
+    for (const [rid, j] of Object.entries(review.byId)) {
+      const ids = j.lines.map((id) => newByText.get(flat(oldById.get(id)?.text || ''))).filter((x) => x != null);
+      if (!ids.length && j.quote) { const hit = newFlat.find(([, t]) => t.includes(flat(j.quote))); if (hit) ids.push(hit[0]); }
+      byId[rid] = j.match === 'none' || ids.length ? { ...j, lines: ids } : { ...j, match: 'none', lines: [], note: 'its evidence line was changed', recommendation: '' };
     }
-    const yrs = resumeYears(model);
+    const sug = review.suggestions.map((g) => ({ ...g, lines: g.lines.map((id) => newByText.get(flat(oldById.get(id)?.text || ''))).filter((x) => x != null) })).filter((g) => g.lines.length);
+    return { ...review, byId, suggestions: sug };
+  }
+
+  // ---------- Resume readability: a separate diagnostic, not part of the fit score ----------
+
+  function readabilityReport(model) {
+    const m = model.meta || {};
+    const checks = [];
+    const add = (ok, level, title, detail, advice = '') => checks.push({ ok, level: ok ? 'ok' : level, title, detail, advice });
+    const unread = m.unreadable > 0.05;
+    add(model.words >= 150 && !unread, 'risk', 'Text can be read', model.words < 150 ? `Only ${model.words} words could be read: an ATS may see an almost empty resume.` : unread ? `${Math.round(m.unreadable * 100)}% of the letters have no text map (a font problem): those words read as gaps.` : `${model.words} words read.`,
+      'Export the resume from Word or Google Docs as a text-based PDF or .docx, not a scan or image.');
+    const heads = new Set(model.lines.filter((l) => l.kind === 'heading').map((l) => l.section));
+    const missing = [['experience', 'Experience'], ['education', 'Education'], ['skills', 'Skills']].filter(([k]) => !heads.has(k)).map(([, n]) => n);
+    add(!missing.length, missing.includes('Experience') ? 'risk' : 'warn', 'Standard section headings', missing.length ? `No heading an ATS recognizes for: ${missing.join(', ')}.` : 'Experience, Education and Skills headings found.', 'Use plain headings such as "Experience", "Education", "Skills".');
+    const expLines = model.lines.filter((l) => l.zone === 'experience');
+    const range1 = new RegExp(RANGE_RE.source, 'i');
+    const dated = expLines.filter((l) => range1.test(l.text));
+    add(!expLines.length || dated.length > 0, 'warn', 'Employment dates', dated.length ? `${dated.length} date range${dated.length === 1 ? '' : 's'} found (e.g. "${dated[0].text.match(range1)?.[0] || ''}").` : 'No date ranges in a common format were found in the experience section.',
+      'Write each job\'s dates like "Jan 2020 - Present" or "01/2020 - 03/2023" on the job\'s line.');
+    const email = EMAIL_RE.test(model.fullText), phone = PHONE_RE.test(model.fullText);
+    add(email && phone, 'warn', 'Contact details', email && phone ? 'Email and phone found in the text.' : `${email ? '' : 'No email'}${!email && !phone ? ' and ' : ''}${phone ? '' : 'no phone'} found in the readable text.`, 'Put email and phone as plain text near the top.');
+    if (m.headerContact) add(false, 'warn', 'Contact details in the page header', 'Email or phone are only in the Word page header; some ATS do not read page headers.', 'Move them into the first lines of the page body.');
+    if (m.tables) add(false, 'warn', 'Tables', 'The resume uses a table. Some ATS read table cells out of order or skip them.', 'If the table holds jobs or skills, consider plain lines instead.');
+    if (m.textboxes) add(false, 'warn', 'Text boxes', 'The resume uses text boxes. Some ATS do not read text inside text boxes.', 'Move important text (skills, contact details) out of text boxes.');
+    if (m.columns) add(false, 'warn', 'Columns', 'The layout has two columns. Some ATS read across the columns and mix the lines.', 'A single-column layout is read in order everywhere.');
+    if (model.words > 1300) add(false, 'info', 'Length', `${model.words} words: long for most roles.`, 'Keep the most relevant 1-2 pages.');
+    if (m.stuffed?.length) add(false, 'warn', 'Repeated keywords', `Written 7+ times: ${m.stuffed.slice(0, 4).join(', ')}. This can read as keyword stuffing.`, 'Name each skill where it was used, not over and over.');
+    const level = checks.some((c) => c.level === 'risk') ? 'High parsing risk' : checks.some((c) => c.level === 'warn') ? 'Some parsing risks' : 'Good';
+    return { level, checks };
+  }
+
+  // ---------- The JobBid Fit Estimate ----------
+
+  const SENIORITY = [['intern', 0], ['junior', 1], ['jr', 1], ['entry', 1], ['associate', 1], ['mid', 2], ['senior', 3], ['sr', 3], ['lead', 4], ['staff', 4], ['principal', 5], ['architect', 4], ['manager', 4], ['head', 5], ['director', 5]];
+  const levelOf = (t) => { const w = tokens(t); let lv = null; for (const [k, n] of SENIORITY) if (w.includes(k)) lv = Math.max(lv ?? 0, n); return lv; };
+  const BANDS = [[80, 'Strong alignment'], [65, 'Good alignment'], [45, 'Partial alignment'], [0, 'Limited alignment']];
+
+  // model: the chosen evidence (combineEvidence); review: validateReview / rulesReview; years: yearsInfo.
+  function score(model, analysis, weightsIn, review, years) {
+    const weights = { ...DEFAULT_WEIGHTS, ...(weightsIn || {}) };
+    for (const k of Object.keys(weights)) weights[k] = Math.max(0, Number(weights[k]) || 0);
+    review = review || rulesReview(analysis, model);
+    years = years || yearsInfo({ resume: model.resume || model, profile: model.profile || null, source: model.source || 'resume' });
+    const byLine = new Map(model.lines.map((l) => [l.id, l]));
+    const rows = analysis.requirements.map((r) => {
+      let j = review.byId[r.id] || { match: 'none', lines: [], quote: '', explanation: '', recommendation: '', note: '' };
+      // The words themselves always count: a term written in the evidence is a direct match, whatever the AI said.
+      const lit = matchRequirement(r, model.lines);
+      if (lit.status === 'matched' && (j.match === 'none' || j.match === 'related' || (j.match === 'equivalent' && !lit.via))) {
+        j = { ...j, match: lit.via ? 'equivalent' : 'direct', lines: lit.evidence.map((e) => e.lineId), quote: '', explanation: j.match === 'none' || !j.explanation ? (lit.via ? `Written as "${lit.via}"` : 'Named in the evidence') : j.explanation, note: j.match === 'none' && review.mode === 'ai' ? 'found by its exact words' : j.note };
+      }
+      const ev = j.lines.map((id) => byLine.get(id)).filter(Boolean);
+      const evidence = ev.slice(0, 3).map((l) => ({ lineId: l.id, section: l.zone, source: l.source || 'resume', text: l.text.length > 220 ? l.text.slice(0, 217) + '...' : l.text, demonstrated: DEMO_ZONES.has(l.zone) }));
+      const status = j.match === 'direct' || j.match === 'equivalent' ? 'matched' : j.match === 'related' ? 'partial' : 'missing';
+      return { id: r.id, term: r.term, category: r.category, importance: r.importance, kind: KIND_LABEL(r), hard: !!r.hard, weight: r.weight, aliases: r.aliases, related: r.related, quoteJob: r.quote || '',
+        match: j.match, matchLabel: MATCH_LABELS[j.match], status, demonstrated: evidence.some((e) => e.demonstrated), evidence, quote: j.quote, explanation: j.explanation, recommendation: j.recommendation, note: j.note,
+        via: lit.via || '', mentions: lit.mentions || 0 };
+    });
+    model.meta = { ...(model.meta || {}), stuffed: rows.filter((x) => x.mentions >= 7).map((x) => x.term) };
+    const sumW = (list) => list.reduce((s, x) => s + x.weight, 0);
+    const c = (x) => CREDIT[x.match];
+    const lostText = (x) => (x.match === 'related' ? `"${x.term}": related experience only${x.explanation ? ` - ${x.explanation}` : ''}` : x.match === 'contradiction' ? `"${x.term}": the evidence conflicts${x.explanation ? ` - ${x.explanation}` : ''}`
+      : x.match === 'equivalent' ? `"${x.term}": equivalent, not the posting's words` : `"${x.term}" (${x.importance}) is not demonstrated`);
+    const group = (key, list, detail) => {
+      if (!list.length) return null;
+      const W = sumW(list);
+      return { key, credit: list.reduce((s, x) => s + x.weight * c(x), 0) / W, detail,
+        deductions: list.filter((x) => c(x) < 1).map((x) => ({ lost: (x.weight * (1 - c(x))) / W, text: lostText(x), term: x.term })) };
+    };
+    const skills = rows.filter((x) => KEYWORD_CATS.has(x.category) && x.category !== 'soft');
+    const req = skills.filter((x) => x.importance === 'required');
+    const pref = rows.filter((x) => (KEYWORD_CATS.has(x.category) && x.importance !== 'required') || x.category === 'soft');
+    const shown = (list) => list.filter((x) => x.status === 'matched').length;
+    const comps = [
+      group('required', req, `${shown(req)} of ${req.length} required skills shown`),
+      group('preferred', pref, `${shown(pref)} of ${pref.length} preferred / nice-to-have shown`),
+      group('responsibilities', rows.filter((x) => x.category === 'responsibility'), `${shown(rows.filter((x) => x.category === 'responsibility'))} of ${rows.filter((x) => x.category === 'responsibility').length} main duties shown`),
+      group('industry', rows.filter((x) => x.category === 'domain'), `${shown(rows.filter((x) => x.category === 'domain'))} of ${rows.filter((x) => x.category === 'domain').length} of the job's industries shown`),
+    ].filter(Boolean);
+    // Relevant work experience: the years asked for, and the job's skills shown in actual jobs or projects
+    // (not only listed under Skills).
+    const expParts = [];
     if (analysis.yearsRequired) {
-      const need = analysis.yearsRequired;
-      const c = yrs.years == null ? 0.5 : Math.min(1, yrs.years / need);
-      comps.push({ key: 'years', credit: c, deductions: c < 1 ? [{ lost: 1 - c, text: yrs.years == null ? 'No work dates the ATS can read (e.g. "Jan 2020 - Present")' : `The job asks for ${need}+ years; the resume's dates show about ${yrs.years}` }] : [],
-        detail: `Job: ${need}+ yrs · resume: ${yrs.years == null ? 'no dates found' : yrs.years + ' yrs' + (yrs.from === 'claim' ? ' (stated)' : '')}` });
+      const need = analysis.yearsRequired, have = years.years;
+      const yc = have == null ? 0.5 : Math.min(1, have / need);
+      expParts.push({ w: 1, c: yc, text: have == null ? 'No work dates or stated years found' : have < need ? `The job asks for ${need}+ years; ${years.from} ${have}` : '' });
     }
+    const core = skills.filter((x) => x.importance !== 'optional');
+    if (core.length) {
+      const W = sumW(core);
+      const d = (x) => (x.status === 'matched' ? (x.demonstrated ? 1 : 0.3) : x.match === 'related' && x.demonstrated ? 0.2 : 0);
+      const dc = core.reduce((s, x) => s + x.weight * d(x), 0) / W;
+      const listedOnly = core.filter((x) => x.status === 'matched' && !x.demonstrated).map((x) => x.term);
+      expParts.push({ w: 1, c: dc, text: listedOnly.length ? `Listed but not shown in a job or project: ${listedOnly.slice(0, 5).join(', ')}` : dc < 1 ? 'Some of the job\'s skills are not shown in work experience' : '' });
+    }
+    if (expParts.length) {
+      const W = expParts.reduce((s, x) => s + x.w, 0);
+      comps.push({ key: 'experience', credit: expParts.reduce((s, x) => s + x.w * x.c, 0) / W, deductions: expParts.filter((x) => x.c < 1 && x.text).map((x) => ({ lost: (x.w * (1 - x.c)) / W, text: x.text })),
+        detail: `${analysis.yearsRequired ? `Job: ${analysis.yearsRequired}+ yrs · ${years.years == null ? 'no years found' : `${years.years} yrs (${years.from})`} · ` : ''}${core.filter((x) => x.status === 'matched' && x.demonstrated).length} of ${core.length} skills shown in work` });
+    }
+    // Title & seniority: the job's own title words (an AI look-alike title counts 70%), and the level.
+    const title = titleMatch(model, analysis);
+    const jobLevel = levelOf(analysis.seniority || '') ?? levelOf(analysis.title);
+    const myLevel = title?.line ? levelOf(title.line) : null;
+    if (title) {
+      const sc = jobLevel == null || myLevel == null ? null : myLevel >= jobLevel ? 1 : jobLevel - myLevel === 1 ? 0.5 : 0;
+      const tc = sc == null ? title.credit : 0.75 * title.credit + 0.25 * sc;
+      const ded = [];
+      if (title.credit < 0.95) ded.push({ lost: (sc == null ? 1 : 0.75) * (1 - title.credit), text: title.line ? `Closest title: "${title.line.slice(0, 80)}" vs "${analysis.title}"` : `No title close to "${analysis.title}"` });
+      if (sc != null && sc < 1) ded.push({ lost: 0.25 * (1 - sc), text: 'The resume\'s title is a lower level than the job\'s' });
+      comps.push({ key: 'title', credit: tc, deductions: ded, detail: title.line ? `Closest: ${title.line.slice(0, 80)}` : 'No similar title found' });
+    }
+    // Education & certifications.
     const quals = rows.filter((x) => x.category === 'certification' || x.category === 'qualification');
     const deg = degreeOf(model);
     if (analysis.degree || quals.length) {
@@ -486,37 +717,85 @@ ${clean(job.description).slice(0, 9000)}`;
       if (analysis.degree) {
         const need = LEVEL_N[analysis.degree.level];
         const fieldOk = !analysis.degree.fields.length || analysis.degree.fields.some((f) => deg.lines.some((l) => phraseAt(l.stems, stems(f)) >= 0));
-        const c = !deg.level ? 0 : deg.level >= need ? (fieldOk ? 1 : 0.8) : 0.35;
-        const w = analysis.degree.required ? 3 : 1.5;
-        parts.push({ w, c, text: !deg.level ? `No degree found in the resume (the job ${analysis.degree.required ? 'asks for' : 'prefers'} a ${analysis.degree.level}'s)` : deg.level < need ? `The job ${analysis.degree.required ? 'asks for' : 'prefers'} a ${analysis.degree.level}'s degree; the resume shows a lower one` : !fieldOk ? `Degree field differs from ${analysis.degree.fields.slice(0, 3).join(' / ')}` : '' });
+        const dc = !deg.level ? 0 : deg.level >= need ? (fieldOk ? 1 : 0.8) : 0.35;
+        parts.push({ w: analysis.degree.required ? 3 : 1.5, c: dc, text: !deg.level ? `No degree found (the job ${analysis.degree.required ? 'asks for' : 'prefers'} a ${analysis.degree.level}'s)` : deg.level < need ? `The job ${analysis.degree.required ? 'asks for' : 'prefers'} a ${analysis.degree.level}'s degree; the evidence shows a lower one` : !fieldOk ? `Degree field differs from ${analysis.degree.fields.slice(0, 3).join(' / ')}` : '' });
       }
-      for (const q of quals) parts.push({ w: q.weight, c: credit[q.status], text: q.status === 'matched' ? '' : `"${q.term}" (${q.importance}) ${q.status === 'partial' ? 'only partly matched' : 'is missing'}` });
-      // At least one required item's worth: a single missing "preferred" certificate costs half, not all.
+      for (const q of quals) parts.push({ w: q.weight, c: c(q), text: c(q) < 1 ? lostText(q) : '' });
       const W = Math.max(3, parts.reduce((s, x) => s + x.w, 0));
-      comps.push({ key: 'qualifications', credit: 1 - parts.reduce((s, x) => s + x.w * (1 - x.c), 0) / W,
-        deductions: parts.filter((x) => x.c < 1 && x.text).map((x) => ({ lost: (x.w * (1 - x.c)) / W, text: x.text })),
-        detail: deg.line ? `Resume: ${deg.line.slice(0, 80)}` : 'No degree line found' });
+      comps.push({ key: 'education', credit: 1 - parts.reduce((s, x) => s + x.w * (1 - x.c), 0) / W, deductions: parts.filter((x) => x.c < 1 && x.text).map((x) => ({ lost: (x.w * (1 - x.c)) / W, text: x.text })),
+        detail: deg.line ? `Evidence: ${deg.line.slice(0, 80)}` : 'No degree line found' });
     }
-    const rd = readability(model);
-    comps.push({ key: 'readability', credit: rd.credit, deductions: rd.deductions, detail: rd.deductions.length ? `${rd.deductions.length} formatting warning${rd.deductions.length === 1 ? '' : 's'}` : 'Clean, readable layout' });
 
-    const used = comps.filter((c) => weights[c.key] > 0);
-    const W = used.reduce((s, c) => s + weights[c.key], 0) || 1;
-    const components = used.map((c) => {
-      const max = (weights[c.key] / W) * 100;
-      return { key: c.key, label: WEIGHT_LABELS[c.key], weight: weights[c.key], max: round1(max), points: round1(max * Math.max(0, Math.min(1, c.credit))), credit: round1(c.credit * 100) / 100,
-        detail: c.detail, deductions: c.deductions.map((d) => ({ points: round1(max * d.lost), text: d.text })).filter((d) => d.points >= 0.1).sort((a, b) => b.points - a.points) };
+    const used = comps.filter((x) => weights[x.key] > 0);
+    const W = used.reduce((s, x) => s + weights[x.key], 0) || 1;
+    const order = Object.keys(DEFAULT_WEIGHTS);
+    const components = used.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key)).map((x) => {
+      const max = (weights[x.key] / W) * 100;
+      return { key: x.key, label: WEIGHT_LABELS[x.key], weight: weights[x.key], max: round1(max), points: round1(max * Math.max(0, Math.min(1, x.credit))), credit: round1(x.credit * 100) / 100,
+        detail: x.detail, deductions: x.deductions.map((d) => ({ points: round1(max * d.lost), text: d.text })).filter((d) => d.points >= 0.1).sort((a, b) => b.points - a.points) };
     });
-    const total = round1(components.reduce((s, c) => s + max0(c.points), 0));
+    const total = Math.min(100, round1(components.reduce((s, x) => s + max0(x.points), 0)));
+    // Readability is about the resume file; with only the profile as evidence there is none to check.
+    const readability = model.source === 'profile' ? { level: 'Not checked (profile only)', checks: [] } : readabilityReport(model.resume || model);
+    const eligibility = rows.filter((x) => x.hard).map((x) => ({ term: x.term, match: x.match, met: x.status === 'matched', explanation: x.explanation }));
     return {
-      version: VERSION, label: 'Estimated ATS match', score: Math.min(100, total), components, requirements: rows,
+      version: VERSION, label: 'JobBid Fit Estimate', band: BANDS.find(([n]) => total >= n)[1], score: total, mode: review.mode, source: model.source || 'resume',
+      components, requirements: rows, labels: WEIGHT_LABELS,
       counts: { matched: rows.filter((x) => x.status === 'matched').length, partial: rows.filter((x) => x.status === 'partial').length, missing: rows.filter((x) => x.status === 'missing').length, total: rows.length },
-      years: { need: analysis.yearsRequired, have: yrs.years, from: yrs.from }, title: title ? { line: title.line, pct: Math.round(title.credit * 100) } : null,
-      degree: analysis.degree ? { need: analysis.degree.level, have: Object.keys(LEVEL_N).find((k) => LEVEL_N[k] === deg.level) || '', line: deg.line } : null,
-      warnings: rd.deductions.map((d) => d.text), weights, words: model.words,
+      years: { need: analysis.yearsRequired, have: years.years, from: years.from, note: years.note, conflict: years.conflict, resume: years.resume, profile: years.profile },
+      title: title ? { job: analysis.title, line: title.line, pct: Math.round(title.credit * 100), jobLevel, myLevel } : null,
+      degree: analysis.degree ? { need: analysis.degree.level, required: analysis.degree.required, fields: analysis.degree.fields, have: Object.keys(LEVEL_N).find((k) => LEVEL_N[k] === deg.level) || '', line: deg.line } : null,
+      eligibility, readability, warnings: readability.checks.filter((x) => !x.ok).map((x) => x.detail),
+      summaryReview: review.summary || null, suggestions: (review.suggestions || []).map((g) => ({ text: g.text, evidence: g.lines.map((id) => byLine.get(id)?.text).filter(Boolean).slice(0, 2) })),
+      weights, words: model.words,
     };
   }
   const max0 = (n) => Math.max(0, n);
+
+  // What changed since the last score of the same job and resume, and why (requirements, evidence, weights, method).
+  const reportDigest = (r) => ({ score: r.score, version: r.version, mode: r.mode, source: r.source, weights: r.weights, at: new Date().toISOString(),
+    components: Object.fromEntries(r.components.map((x) => [x.key, x.points])), reqs: Object.fromEntries(r.requirements.map((x) => [x.term, x.match])) });
+  function diffReports(prev, cur) {
+    if (!prev || prev.score == null) return null;
+    const d = reportDigest(cur);
+    const reasons = [];
+    if (prev.version !== d.version) reasons.push('The scoring method was updated since the last score.');
+    if (prev.mode !== d.mode) reasons.push(d.mode === 'ai' ? 'This time the AI reviewed the evidence (last time: rules only).' : 'This time only rules were used (the AI was not available).');
+    if (prev.source !== d.source) reasons.push(`Evidence changed from ${prev.source} to ${d.source}.`);
+    if (JSON.stringify(prev.weights) !== JSON.stringify(d.weights)) reasons.push('The scoring weights were changed.');
+    for (const [k, v] of Object.entries(d.components)) { const b = prev.components?.[k]; if (b == null) reasons.push(`New part: ${WEIGHT_LABELS[k] || k} (${v} points).`); else if (Math.abs(v - b) >= 0.5) reasons.push(`${WEIGHT_LABELS[k] || k}: ${b} → ${v}.`); }
+    const moved = Object.entries(d.reqs).filter(([t, m]) => prev.reqs?.[t] && prev.reqs[t] !== m).map(([t, m]) => `${t}: ${MATCH_LABELS[prev.reqs[t]] || prev.reqs[t]} → ${MATCH_LABELS[m]}`);
+    if (moved.length) reasons.push(`Requirements judged differently: ${moved.slice(0, 6).join('; ')}${moved.length > 6 ? ` and ${moved.length - 6} more` : ''}.`);
+    const newReqs = Object.keys(d.reqs).filter((t) => !(t in (prev.reqs || {}))).length, goneReqs = Object.keys(prev.reqs || {}).filter((t) => !(t in d.reqs)).length;
+    if (newReqs || goneReqs) reasons.push(`The job's requirement list changed (${newReqs} new, ${goneReqs} gone).`);
+    if (Math.abs(d.score - prev.score) < 0.1 && !reasons.length) return null;
+    return { from: prev.score, to: d.score, delta: round1(d.score - prev.score), at: prev.at, reasons };
+  }
+
+  // Without the AI: the job's requirements from its words alone (labelled "rules only" everywhere it shows).
+  const FALLBACK_TERMS = ['python', 'java', 'javascript', 'typescript', 'go', 'golang', 'rust', 'c++', 'c#', 'scala', 'kotlin', 'swift', 'ruby', 'php', 'sql', 'nosql', 'bash',
+    'react', 'angular', 'vue', 'node.js', 'django', 'flask', 'fastapi', 'spring', '.net', 'graphql', 'rest', 'grpc', 'microservices', 'aws', 'azure', 'gcp', 'sagemaker', 'vertex ai',
+    'docker', 'kubernetes', 'terraform', 'ansible', 'jenkins', 'ci/cd', 'linux', 'git', 'postgresql', 'mysql', 'mongodb', 'redis', 'dynamodb', 'elasticsearch', 'snowflake',
+    'redshift', 'bigquery', 'databricks', 'spark', 'pyspark', 'hadoop', 'kafka', 'airflow', 'dbt', 'etl', 'data warehouse', 'tableau', 'power bi', 'looker', 'pandas', 'numpy',
+    'scikit-learn', 'pytorch', 'tensorflow', 'keras', 'hugging face', 'llm', 'large language models', 'generative ai', 'rag', 'langchain', 'nlp', 'computer vision',
+    'machine learning', 'deep learning', 'mlops', 'mlflow', 'statistics', 'statistical modeling', 'a/b testing', 'recommendation systems', 'reinforcement learning',
+    'agile', 'scrum', 'jira', 'devops', 'observability', 'prometheus', 'grafana', 'datadog', 'salesforce', 'excel', 'figma', 'ios', 'android'];
+  function fallbackAnalysis(job, reason = '') {
+    const text = String(job.description || '');
+    const lines = text.split(/\n|(?<=[.;])\s+/);
+    const NICE = /\b(nice to have|preferred|bonus|a plus|plus if|good to have|desirable|ideally|familiarity)\b/i;
+    const reqs = [];
+    for (const t of FALLBACK_TERMS) {
+      const f = stems(t);
+      const at = lines.find((l) => phraseAt(stems(l), f) >= 0);
+      if (!at) continue;
+      if (reqs.some((r) => stems(r.term).join(' ') === f.join(' '))) continue;
+      reqs.push({ term: t.length <= 4 ? t.toUpperCase().replace('GOLANG', 'Go') : t.replace(/\b\w/g, (ch) => ch.toUpperCase()), aliases: t === 'llm' ? ['LLMs', 'Large Language Models'] : t === 'golang' ? ['Go'] : [], related: [], category: 'skill', importance: NICE.test(at) ? 'preferred' : 'required', quote: clean(at).slice(0, 120) });
+    }
+    const lv = /\b(ph\.?\s?d|doctorate)\b/i.test(text) ? 'phd' : /\bmaster'?s?\b/i.test(text) ? 'master' : /\b(bachelor'?s?|b\.?s\.?\b|bs\/ms)\b/i.test(text) ? 'bachelor' : '';
+    return { version: VERSION, mode: 'rules', reason, title: clean(job.title), company: clean(job.company), titleAliases: [], seniority: '', yearsRequired: yearsInText(text),
+      degree: lv ? { level: lv, fields: [], required: !/\bor equivalent\b/i.test(text) } : null, requirements: reqs.slice(0, 30).map(prepReq), dropped: 0, droppedTerms: [], received: reqs.length, at: new Date().toISOString() };
+  }
 
   // ---------- Optimizer: the AI's proposed changes, checked ----------
 
@@ -611,7 +890,7 @@ ${lines.slice(0, 16000)}`;
         const inNew = r.forms.some((f) => phraseAt(tStems, f) >= 0);
         if (!inNew || r.forms.some((f) => phraseAt(before, f) >= 0)) continue;
         added.push(r.term);
-        const inResume = r.forms.some((f) => origStems.some((s) => phraseAt(s, f) >= 0));
+        const inResume = r.forms.some((f) => origStems.some((s) => phraseAt(s, f) >= 0)) || reqOf.get(r.term)?.status === 'matched';
         if (!inResume && !confirmed.has(r.term.toLowerCase())) unsupported.push(r.term);
       }
       if (unsupported.length) flags.push(`Adds ${unsupported.map((t) => `"${t}"`).join(', ')}, which the resume doesn't show and you didn't confirm`);
@@ -728,6 +1007,7 @@ ${lines.slice(0, 16000)}`;
     };
   }
 
-  root.JobBidATS = { VERSION, DEFAULT_WEIGHTS, WEIGHT_LABELS, IMPORTANCE, SECTION_NAMES, clean, tokens, stem, stems, phraseAt, hash, headingKey,
+  root.JobBidATS = { MATCH_LABELS, CREDIT, buildProfileModel, combineEvidence, yearsFacts, yearsInfo, reviewPrompt, validateReview, rulesReview, carryReview, readabilityReport,
+    diffReports, reportDigest, fallbackAnalysis, VERSION, DEFAULT_WEIGHTS, WEIGHT_LABELS, IMPORTANCE, SECTION_NAMES, clean, tokens, stem, stems, phraseAt, hash, headingKey,
     buildModel, analysisPrompt, validateAnalysis, requirementList, matchRequirement, resumeYears, score, optimizePrompt, validateChanges, applyToLines, compareRows, verify, nextStep, yearsInText };
 })(typeof self !== 'undefined' ? self : globalThis);

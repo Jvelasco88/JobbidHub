@@ -823,9 +823,11 @@ function atsSteps(op, labels) {
   };
 }
 
-// The job's requirements, checked against its text. Cached per job text.
+// The job's requirements, read by the AI and checked against the posting (cached per job text). When the AI
+// can't be used, the requirements come from the posting's words alone and the result says "rules only".
+const atsJobKey = (job) => 'j' + JobBidATS.hash(`${job.title || ''}\n${job.description || ''}`);
 async function atsJobAnalysis(job, { force = false, cachedOnly = false, prog = null, step = 0 } = {}) {
-  const key = 'j' + JobBidATS.hash(`${job.title || ''}\n${job.description || ''}`);
+  const key = atsJobKey(job);
   const { atsJobs = {} } = await chrome.storage.local.get('atsJobs');
   if (!force && atsJobs[key]?.version === JobBidATS.VERSION) {
     prog?.skip(step, `already read: ${atsJobs[key].requirements.length} requirements`);
@@ -835,38 +837,41 @@ async function atsJobAnalysis(job, { force = false, cachedOnly = false, prog = n
   if (String(job.description || '').length < 200) throw new Error('Open the job posting first: there is no job description on this page');
   prog?.start(step, 'The AI reads the posting');
   aiStage('Reading the job\'s requirements...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
+  let a = null, reason = '';
   try {
     const accept = (v) => JobBidATS.requirementList(v).length > 0;
     const prompt = JobBidATS.analysisPrompt(job);
-    let out = await ai(prompt, { temperature: 0.1, timeoutMs: 150000, accept });
-    let a = JobBidATS.validateAnalysis(out, job);
+    let out = await ai(prompt, { temperature: 0, timeoutMs: 150000, accept });
+    a = JobBidATS.validateAnalysis(out, job);
     // Too few usable: once more, reminding the AI of the format and to use the posting's own words.
     if (a.requirements.length < 3) {
       prog?.start(step, `Only ${a.requirements.length} usable requirement${a.requirements.length === 1 ? '' : 's'}: asking the AI again`);
-      const out2 = await ai(prompt + `
-
-IMPORTANT: your last answer gave ${a.received ? `${a.received} items, but ${a.dropped} of them do not appear in the posting` : 'no "requirements" list'}. Reply with exactly {"requirements":[{"term":"...","aliases":[],"related":[],"category":"skill","importance":"required"}], "titleAliases":[], "yearsRequired":null, "degree":null}, and copy each "term" word for word from the posting text above.`,
-        { temperature: 0.1, timeoutMs: 150000, accept }).catch(() => null);
+      const out2 = await ai(prompt + `\n\nIMPORTANT: your last answer gave ${a.received ? `${a.received} items, but ${a.dropped} of them are not in the posting` : 'no "requirements" list'}. Reply with exactly the JSON shape above, and copy each "quote" word for word from the posting text.`,
+        { temperature: 0, timeoutMs: 150000, accept }).catch(() => null);
       const a2 = out2 && JobBidATS.validateAnalysis(out2, job);
       if (a2 && a2.requirements.length > a.requirements.length) { a = a2; out = out2; }
     }
     if (a.requirements.length < 3) {
-      // Kept on this computer only, to see what the AI answered.
       await chrome.storage.local.set({ atsLastRaw: { at: new Date().toISOString(), job: job.title, url: job.url, descriptionStart: String(job.description).slice(0, 400), raw: JSON.stringify(out ?? null).slice(0, 20000) } });
-      throw new Error(!a.received
-        ? `The AI's answer had no list of requirements${out ? ` (it answered: ${JSON.stringify(out).slice(0, 120)})` : ''}. Try again, or try another AI key.`
-        : `The AI listed ${a.received} requirements, but ${a.dropped} are not in the job text JobBid read from this page${a.droppedTerms.length ? ` (e.g. ${a.droppedTerms.slice(0, 3).map((t) => `"${t}"`).join(', ')})` : ''}. This page may not show the full job description: open the job's own posting page and try again.`);
+      reason = !a.received ? 'the AI\'s answer had no list of requirements' : `the AI listed ${a.received} requirements but ${a.dropped} are not in this page's job text${a.droppedTerms.length ? ` (e.g. ${a.droppedTerms.slice(0, 2).map((t) => `"${t}"`).join(', ')})` : ''}`;
+      a = null;
     }
-    atsJobs[key] = a;
-    for (const k of Object.keys(atsJobs).sort((x, y) => (atsJobs[y].at || '').localeCompare(atsJobs[x].at || '')).slice(40)) delete atsJobs[k];
-    await chrome.storage.local.set({ atsJobs });
-    aiStage(`Job read: ${a.requirements.length} requirements`, { state: 'done' });
-    prog?.done(step, `${a.requirements.length} requirements${a.dropped ? `, ${a.dropped} not in the posting dropped` : ''}`);
-    return a;
   } catch (e) {
-    aiStage(e.message, { state: 'error' });
-    throw e;
+    reason = e.message;
   }
+  if (!a) {
+    aiStage(`Job read by rules only: ${reason}`, { state: 'error' });
+    const f = JobBidATS.fallbackAnalysis(job, reason);
+    if (f.requirements.length < 2) throw new Error(`The job could not be read: ${reason}`);
+    prog?.done(step, `rules only (${reason.slice(0, 80)}): ${f.requirements.length} requirements`);
+    return f; // not cached: the AI is tried again next time
+  }
+  atsJobs[key] = a;
+  for (const k of Object.keys(atsJobs).sort((x, y) => (atsJobs[y].at || '').localeCompare(atsJobs[x].at || '')).slice(40)) delete atsJobs[k];
+  await chrome.storage.local.set({ atsJobs });
+  aiStage(`Job read: ${a.requirements.length} requirements`, { state: 'done' });
+  prog?.done(step, `${a.requirements.length} requirements${a.dropped ? `, ${a.dropped} not in the posting dropped` : ''}`);
+  return a;
 }
 
 // The resume to score: an optimized version the page holds, or the profile's file.
@@ -874,121 +879,178 @@ async function atsSource(profile, resumeId, file) {
   if (file?.data) return { name: file.name, type: file.type, data: file.data, id: file.id || '', optimized: true };
   const list = profile?.resumes || [];
   const meta = list.find((r) => r.id === resumeId) || list.find((r) => r.id === profile?.defaultResumeId) || list[0];
-  if (!meta) throw new Error('This profile has no resume file. Add a PDF or Word resume in the dashboard first.');
+  if (!meta) throw new Error('This profile has no resume file. Add a PDF or Word resume in the dashboard, or choose "Profile" as the evidence.');
   const key = 'file_' + meta.id;
   const data = (await chrome.storage.local.get(key))[key];
   if (!data) throw new Error(`${meta.name} is not on this computer yet. Wait for the sync, then try again.`);
   return { name: meta.name, type: meta.type, data, id: meta.id, optimized: false };
 }
 const atsWeights = async () => ({ ...JobBidATS.DEFAULT_WEIGHTS, ...((await chrome.storage.local.get('atsWeights')).atsWeights || {}) });
-
-async function atsRead(src, analysis) {
-  const doc = await rdOpen(src);
-  const model = JobBidATS.buildModel(doc.lines, doc.meta);
-  const report = JobBidATS.score(model, analysis, await atsWeights());
-  return { doc, model, report };
-}
 const atsLines = (model) => model.lines.map((l) => ({ id: l.id, text: l.text, zone: l.zone, kind: l.kind, lock: l.lock, bullet: l.bullet }));
+const atsSourceOf = (s) => (['resume', 'profile', 'both'].includes(s) ? s : 'resume');
+
+// The evidence: the resume file and/or the profile, as chosen. The profile is always read for its years, so a
+// disagreement with the resume can be shown, but its lines are only used when the profile is chosen.
+async function atsEvidence({ profile, resumeId, file, source }, prog, steps = [1, 2]) {
+  source = atsSourceOf(source);
+  let src = null, doc = null, resumeModel = null;
+  if (source !== 'profile') {
+    prog?.start(steps[0]);
+    src = await atsSource(profile, resumeId, file);
+    doc = await rdOpen(src);
+    resumeModel = JobBidATS.buildModel(doc.lines, doc.meta);
+    prog?.done(steps[0], `${src.name}: ${resumeModel.lines.length} lines, ${resumeModel.words} words`);
+  } else prog?.skip(steps[0], 'not used (evidence: profile)');
+  const profileModel = JobBidATS.buildProfileModel(profile || {});
+  if (source === 'resume') prog?.skip(steps[1], 'not used (evidence: resume) - read only for its years');
+  else { prog?.start(steps[1]); prog?.done(steps[1], `${profileModel.lines.length} profile lines`); }
+  if (source === 'profile' && profileModel.lines.length < 3) throw new Error('This profile has almost nothing filled in. Fill the profile in the dashboard, or use the resume file.');
+  const ev = JobBidATS.combineEvidence(resumeModel, profileModel, source);
+  return { src, doc, resumeModel, profileModel, ev, years: JobBidATS.yearsInfo(ev), source };
+}
+
+// The AI's review of the evidence for every requirement, checked against the evidence (cached: the same job and
+// evidence always get the same judgments). Without the AI: rules only, and the result says so.
+async function atsReview(analysis, ev, { force = false, cachedOnly = false, prog = null, step = 3 } = {}) {
+  if (analysis.mode === 'rules') { prog?.skip(step, 'rules only: the job was not read by the AI'); return { ...JobBidATS.rulesReview(analysis, ev), reason: analysis.reason || '' }; }
+  const key = 'r' + JobBidATS.hash([JobBidATS.VERSION, analysis.at, analysis.requirements.map((r) => r.id + ':' + r.term).join('|'), ev.source, ev.fullText].join('\n'));
+  const { atsReviews = {} } = await chrome.storage.local.get('atsReviews');
+  if (!force && atsReviews[key]) { prog?.skip(step, 'already reviewed'); return atsReviews[key]; }
+  if (cachedOnly) return null;
+  prog?.start(step, `${analysis.requirements.length} requirements against ${ev.lines.length} evidence lines`);
+  aiStage('The AI reviews the evidence...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
+  try {
+    const out = await ai(JobBidATS.reviewPrompt(analysis, ev), { temperature: 0, timeoutMs: 200000, accept: (v) => Array.isArray(v?.results) });
+    const review = JobBidATS.validateReview(out, analysis, ev);
+    const judged = Object.values(review.byId).filter((j) => !/did not judge/.test(j.note)).length;
+    if (judged < Math.ceil(analysis.requirements.length / 2)) throw new Error(`the AI judged only ${judged} of ${analysis.requirements.length} requirements`);
+    const fixed = Object.values(review.byId).filter((j) => j.note && !/did not judge/.test(j.note)).length;
+    atsReviews[key] = { ...review, at: new Date().toISOString() };
+    for (const k of Object.keys(atsReviews).sort((x, y) => (atsReviews[y].at || '').localeCompare(atsReviews[x].at || '')).slice(60)) delete atsReviews[k];
+    await chrome.storage.local.set({ atsReviews });
+    aiStage('Evidence reviewed', { state: 'done' });
+    prog?.done(step, `${judged} judged${fixed ? ` · ${fixed} corrected against the evidence` : ''}`);
+    return atsReviews[key];
+  } catch (e) {
+    aiStage(`Rules only: ${e.message}`, { state: 'error' });
+    prog?.done(step, `rules only - ${e.message.slice(0, 90)}`);
+    return { ...JobBidATS.rulesReview(analysis, ev), reason: e.message };
+  }
+}
+
 // Runs one ATS job with its steps; a failure marks the step it happened in.
 async function atsRun(op, labels, fn) {
   const prog = atsSteps(op, labels);
   try { return await fn(prog); } catch (e) { prog.fail(e.message); throw e; }
 }
 
-async function atsScore({ profile, resumeId, file, job, force, cachedOnly }) {
-  if (cachedOnly) {
-    const analysis = await atsJobAnalysis(job, { cachedOnly: true });
-    if (!analysis) return null;
-    return atsScoreWith(analysis, profile, resumeId, file, null);
-  }
-  return atsRun('score', ['Read the job\'s requirements', 'Read the resume file', 'Score it'], async (prog) => {
-    const analysis = await atsJobAnalysis(job, { force, prog, step: 0 });
-    const out = await atsScoreWith(analysis, profile, resumeId, file, prog);
-    prog.finish(`${out.report.score}/100`);
-    return out;
-  });
-}
-async function atsScoreWith(analysis, profile, resumeId, file, prog) {
-  prog?.start(1);
-  const src = await atsSource(profile, resumeId, file);
-  const doc = await rdOpen(src);
-  const model = JobBidATS.buildModel(doc.lines, doc.meta);
-  prog?.done(1, `${src.name}: ${model.lines.length} lines, ${model.words} words`);
-  prog?.start(2);
-  const report = JobBidATS.score(model, analysis, await atsWeights());
-  prog?.done(2, `${report.score}/100 · ${report.counts.matched} matched, ${report.counts.partial} partly, ${report.counts.missing} missing`);
-  const sections = ['summary', 'skills', 'experience', 'projects'].filter((z) => model.lines.some((l) => l.zone === z && !l.lock && l.kind !== 'heading'));
-  return { analysis, report, resume: { id: src.id, name: src.name, type: doc.type, kind: doc.kind, optimized: src.optimized }, lines: atsLines(model), sections };
+// The last score of the same job + resume + evidence, to explain a change.
+async function atsHistory(key, report) {
+  const { atsLast = {} } = await chrome.storage.local.get('atsLast');
+  const diff = JobBidATS.diffReports(atsLast[key], report);
+  atsLast[key] = JobBidATS.reportDigest(report);
+  for (const k of Object.keys(atsLast).sort((x, y) => (atsLast[y].at || '').localeCompare(atsLast[x].at || '')).slice(80)) delete atsLast[k];
+  await chrome.storage.local.set({ atsLast });
+  return diff;
 }
 
-async function atsOptimize({ profile, resumeId, file, job, sections, targets = [], mode }) {
-  return atsRun('optimize', ['Read the job\'s requirements', 'Read the resume file', 'AI writes the changes', 'Check every change'], async (prog) => {
+async function atsScore({ profile, resumeId, file, job, force, cachedOnly, source }) {
+  source = atsSourceOf(source);
+  const run = async (prog) => {
+    const analysis = await atsJobAnalysis(job, { force, cachedOnly, prog, step: 0 });
+    if (!analysis) return null;
+    const e = await atsEvidence({ profile, resumeId, file, source }, prog, [1, 2]);
+    const review = await atsReview(analysis, e.ev, { force, cachedOnly, prog, step: 3 });
+    if (!review) return null;
+    prog?.start(4);
+    const report = JobBidATS.score(e.ev, analysis, await atsWeights(), review, e.years);
+    const histKey = [atsJobKey(job), e.src?.optimized ? 'optimized' : e.src?.id || 'profile', source].join('|');
+    const diff = file?.data ? null : await atsHistory(histKey, report);
+    prog?.done(4, `${report.score}/100 · ${report.band}`);
+    prog?.finish(`${report.score}/100`);
+    const lines = atsLines(e.resumeModel || e.ev);
+    const sections = e.resumeModel ? ['summary', 'skills', 'experience', 'projects'].filter((z) => e.resumeModel.lines.some((l) => l.zone === z && !l.lock && l.kind !== 'heading')) : [];
+    return { report, diff, source, notes: { job: analysis.mode, jobReason: analysis.reason || '', review: review.mode, reviewReason: review.reason || '' },
+      resume: e.src ? { id: e.src.id, name: e.src.name, type: e.doc.type, kind: e.doc.kind, optimized: e.src.optimized } : { id: '', name: 'Profile', type: '', kind: 'profile', optimized: false }, lines, sections };
+  };
+  if (cachedOnly) return run(null);
+  return atsRun('score', ['Read the job\'s requirements', 'Read the resume file', 'Read the profile', 'AI reviews the evidence', 'Score it'], run);
+}
+
+async function atsOptimize({ profile, resumeId, file, job, sections, targets = [], mode, source }) {
+  source = atsSourceOf(source);
+  if (source === 'profile') throw new Error('The optimizer changes the resume file: choose "Resume" or "Resume + profile" as the evidence.');
+  return atsRun('optimize', ['Read the job\'s requirements', 'Read the resume file', 'Read the profile', 'AI writes the changes', 'Check every change'], async (prog) => {
     const analysis = await atsJobAnalysis(job, { prog, step: 0 });
-    prog.start(1);
-    const src = await atsSource(profile, resumeId, file);
-    const { doc, model, report } = await atsRead(src, analysis);
-    prog.done(1, `${model.lines.length} lines · ${model.lines.filter((l) => l.lock).length} locked (names, titles, dates, education)`);
+    const e = await atsEvidence({ profile, resumeId, file, source }, prog, [1, 2]);
+    const review = await atsReview(analysis, e.ev, {});
+    const report = JobBidATS.score(e.ev, analysis, await atsWeights(), review, e.years);
     const sel = (sections || []).filter((z) => ['summary', 'skills', 'experience', 'projects'].includes(z));
     if (!sel.length) throw new Error('Choose at least one section to improve');
-    const fitsOnly = doc.kind === 'pdf' && mode === 'keep';
-    prog.start(2, `${sel.map((z) => JobBidATS.SECTION_NAMES[z]).join(', ')} · ${targets.length} keyword${targets.length === 1 ? '' : 's'}`);
+    const fitsOnly = e.doc.kind === 'pdf' && mode === 'keep';
+    prog.start(3, `${sel.map((z) => JobBidATS.SECTION_NAMES[z]).join(', ')} · ${targets.length} keyword${targets.length === 1 ? '' : 's'}`);
     aiStage('Tailoring the resume to the job...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
     let out;
     try {
-      out = await ai(JobBidATS.optimizePrompt({ model, analysis, report, sections: sel, targets, job, fitsOnly }), { temperature: 0.35, timeoutMs: 280000, accept: (v) => Array.isArray(v?.changes) });
+      out = await ai(JobBidATS.optimizePrompt({ model: e.ev, analysis, report, sections: sel, targets, job, fitsOnly }), { temperature: 0.35, timeoutMs: 280000, accept: (v) => Array.isArray(v?.changes) });
       aiStage('Changes received', { state: 'done' });
-    } catch (e) {
-      aiStage(e.message, { state: 'error' });
-      throw e;
+    } catch (err) {
+      aiStage(err.message, { state: 'error' });
+      throw err;
     }
-    prog.done(2, `${(Array.isArray(out?.changes) ? out.changes : []).length} proposals`);
-    prog.start(3, 'Numbers, skills, names, locked lines');
-    const res = JobBidATS.validateChanges(out, { model, analysis, report, sections: sel, targets, kind: doc.kind, fits: doc.fits });
+    prog.done(3, `${(Array.isArray(out?.changes) ? out.changes : []).length} proposals`);
+    prog.start(4, 'Numbers, skills, names, locked lines');
+    const res = JobBidATS.validateChanges(out, { model: e.ev, analysis, report, sections: sel, targets, kind: e.doc.kind, fits: e.doc.fits });
     const flagged = res.changes.filter((c) => !c.safe).length;
-    prog.done(3, `${res.changes.length - flagged} passed · ${flagged} flagged · ${res.dropped.length} thrown away`);
+    prog.done(4, `${res.changes.length - flagged} passed · ${flagged} flagged · ${res.dropped.length} thrown away`);
     prog.finish(`${res.changes.length} changes`);
-    return { ...res, kind: doc.kind };
+    return { ...res, kind: e.doc.kind };
   });
 }
 
-// Writes the accepted changes into the file, reads the new file back and scores it the same way. The bytes
-// returned are exactly the ones scored, and they are what gets downloaded or attached.
-async function atsBuild({ profile, resumeId, file, job, changes = [], mode = 'keep', targets = [], history = [] }) {
+// Writes the accepted changes into the file, reads the new file back and scores it the same way (the same
+// AI judgments, moved to the new lines; words added count by the same rules). The bytes returned are exactly
+// the ones scored, and they are what gets downloaded or attached.
+async function atsBuild({ profile, resumeId, file, job, changes = [], mode = 'keep', targets = [], history = [], source }) {
+  source = atsSourceOf(source) === 'profile' ? 'resume' : atsSourceOf(source);
   return atsRun('build', ['Read the current resume', 'Write the changes into the file', 'Read the new file back', 'Score it again', 'Check keywords and changes'], async (prog) => {
     if (!changes.length) throw new Error('No change accepted');
     const analysis = await atsJobAnalysis(job, {});
     prog.start(0);
-    const src = await atsSource(profile, resumeId, file);
-    const base = await atsRead(src, analysis);
-    prog.done(0, `${src.name} · ${base.report.score}/100`);
-    const pdfMode = base.doc.kind === 'pdf' ? mode : 'keep';
-    prog.start(1, base.doc.kind === 'docx' ? 'Word: same styles, Word reflows the pages' : pdfMode === 'rebuild' ? 'PDF: clean one-column layout' : 'PDF: original pages, lines that fit');
-    const built = await base.doc.build(changes, pdfMode, base.model);
+    const e = await atsEvidence({ profile, resumeId, file, source }, null);
+    const review = await atsReview(analysis, e.ev, {});
+    const weights = await atsWeights();
+    const before = JobBidATS.score(e.ev, analysis, weights, review, e.years);
+    prog.done(0, `${e.src.name} · ${before.score}/100`);
+    const pdfMode = e.doc.kind === 'pdf' ? mode : 'keep';
+    prog.start(1, e.doc.kind === 'docx' ? 'Word: same styles, Word reflows the pages' : pdfMode === 'rebuild' ? 'PDF: clean one-column layout' : 'PDF: original pages, lines that fit');
+    const built = await e.doc.build(changes, pdfMode, e.resumeModel);
     const leftIds = new Set(built.left.map((c) => c.cid));
     const applied = changes.filter((c) => !leftIds.has(c.cid));
     if (!applied.length) throw new Error(`None of the changes could be written into this file: ${built.left[0]?.why || ''}`);
     prog.done(1, `${applied.length} written${built.left.length ? ` · ${built.left.length} left out` : ''}`);
     prog.start(2);
-    const outFile = { name: src.name, type: base.doc.type, data: rdB64(built.bytes) };
+    const outFile = { name: e.src.name, type: e.doc.type, data: rdB64(built.bytes) };
     const outDoc = await rdOpen(outFile);
     const outModel = JobBidATS.buildModel(outDoc.lines, outDoc.meta);
+    const evAfter = JobBidATS.combineEvidence(outModel, e.profileModel, source);
     prog.done(2, `${outModel.lines.length} lines, ${outModel.words} words${outDoc.meta.pages ? ` · ${outDoc.meta.pages} page${outDoc.meta.pages === 1 ? '' : 's'}` : ''}`);
     prog.start(3);
-    const afterReport = JobBidATS.score(outModel, analysis, await atsWeights());
-    prog.done(3, `${base.report.score} → ${afterReport.score}`);
+    const after = JobBidATS.score(evAfter, analysis, weights, JobBidATS.carryReview(review, e.ev, evAfter), JobBidATS.yearsInfo(evAfter));
+    prog.done(3, `${before.score} → ${after.score}`);
     prog.start(4);
-    const verify = JobBidATS.verify({ before: base.report, after: afterReport, beforeModel: base.model, afterModel: outModel, targets, changes: applied });
+    const verify = JobBidATS.verify({ before, after, beforeModel: e.resumeModel, afterModel: outModel, targets, changes: applied });
     // Scores of every pass so far (the panel sends the earlier ones): the start, then each result.
     const hist = history.filter((n) => typeof n === 'number');
-    if (hist[hist.length - 1] !== base.report.score) hist.push(base.report.score);
-    hist.push(afterReport.score);
-    const next = JobBidATS.nextStep(afterReport, hist, targets.map((t) => t.term));
+    if (hist[hist.length - 1] !== before.score) hist.push(before.score);
+    hist.push(after.score);
+    const next = JobBidATS.nextStep(after, hist, targets.map((t) => t.term));
     prog.done(4, `${verify.present.filter((x) => x.ok).length} of ${applied.length} changes found in the file · ${verify.keywords.filter((k) => k.done).length} of ${verify.keywords.length} keywords done`);
-    prog.finish(`${base.report.score} → ${afterReport.score}`);
+    prog.finish(`${before.score} → ${after.score}`);
     return {
-      file: { ...outFile, changed: applied.length, text: outModel.fullText, score: afterReport.score, mode: built.mode, scoredAt: new Date().toISOString() },
-      before: base.report, after: afterReport, verify, next, left: built.left, mode: built.mode, rebuilt: built.mode === 'rebuild',
-      compare: JobBidATS.compareRows(base.model, applied), finalLines: atsLines(outModel), history: hist,
+      file: { ...outFile, changed: applied.length, text: outModel.fullText, score: after.score, mode: built.mode, scoredAt: new Date().toISOString() },
+      before, after, verify, next, left: built.left, mode: built.mode, rebuilt: built.mode === 'rebuild',
+      compare: JobBidATS.compareRows(e.resumeModel, applied), finalLines: atsLines(outModel), history: hist,
     };
   });
 }
