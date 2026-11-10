@@ -160,7 +160,10 @@ check('rules-only job reading: labelled, with requirements from the posting\'s w
 const rFb = ATS.score(mA, fb, null, ATS.rulesReview(fb, mA));
 check('a rules-only score says so', rFb.mode === 'rules');
 const junk = ATS.validateReview({ results: 'none of that' }, a, mA);
-check('an answer without results: nothing is counted as matched by the AI', Object.values(junk.byId).every((j) => j.match === 'none'));
+check('an answer without results: nothing is taken from the AI, only exact words count (and say so)', Object.values(junk.byId).every((j) => !j.judged && /not judged by the AI/.test(j.note))
+  && Object.entries(junk.byId).every(([id, j]) => j.match === ATS.rulesReview(a, mA).byId[id].match));
+const partial = ATS.validateReview({ results: [reviewOut(mA).results[1]] }, a, mA);
+check('a partial answer: the AI\'s judgments kept, the rest by exact words', partial.byId[a.requirements.find((r) => r.term === 'Model Evaluation').id].judged && Object.values(partial.byId).filter((j) => !j.judged).length === a.requirements.length - 1);
 const liar = ATS.validateReview({ results: a.requirements.map((r) => ({ id: r.id, status: 'direct', lines: [], quote: 'world-class expert in everything' })) }, a, mA);
 check('"direct" for everything with no evidence: all not demonstrated', Object.values(liar.byId).every((j) => j.match === 'none'));
 const rLiar = ATS.score(mA, a, null, liar);

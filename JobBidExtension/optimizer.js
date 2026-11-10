@@ -219,9 +219,9 @@
     const rows = r.requirements.filter((x) => st.filter === 'all' || x.status === st.filter);
     return `
       <div class="card"><div class="top">${ring(r.score)}
-        <div class="grow"><b>Estimated ATS match</b>
-          <div class="t2">How a typical applicant-tracking system would rank this resume file for this job, from the job's own requirements. An estimate, not the employer's official score.</div>
-          <div class="counts"><span class="pill ok">${r.counts.matched} matched</span><span class="pill warn">${r.counts.partial} partly</span><span class="pill err">${r.counts.missing} missing</span>${r.warnings.length ? `<span class="pill">${r.warnings.length} formatting warning${r.warnings.length === 1 ? '' : 's'}</span>` : ''}</div></div>
+        <div class="grow"><b>JobBid Fit Estimate · ${esc(r.band)}</b>
+          <div class="t2">How well the ${r.source === 'both' ? 'resume and profile fit' : r.source === 'profile' ? 'profile fits' : 'resume file fits'} this job's own requirements, ${r.mode === 'ai' ? 'with the AI\'s review of the evidence checked against your text' : 'by exact words only (rules: the AI was not used)'}. JobBid's estimate, not an employer's ATS score.</div>
+          <div class="counts"><span class="pill ${r.mode === 'ai' ? 'acc' : 'warn'}">${r.mode === 'ai' ? 'AI-reviewed' : 'Rules only'}</span><span class="pill ok">${r.counts.matched} shown</span><span class="pill warn">${r.counts.partial} related only</span><span class="pill err">${r.counts.missing} not demonstrated</span></div></div>
         <div><div class="t3">Resume file</div>
           <select data-act="pickResume">${resumes.map((x) => `<option value="${esc(x.id)}" ${!st.file && x.id === resume.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}${st.file ? `<option selected>${esc(resume.name)} (${st.file.uploaded ? 'your file' : 'optimized'})</option>` : ''}</select>
           <div style="margin-top:6px"><label class="link">Score another file...<input type="file" data-act="upload" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label></div></div>
@@ -236,20 +236,22 @@
         <div class="tabs">${filters.map(([k, l]) => `<button data-act="filter" data-f="${k}" class="${st.filter === k ? 'on' : ''}">${l}</button>`).join('')}</div>
         ${rows.map(reqRow).join('') || '<div class="t3">None</div>'}
       </div>
-      ${r.warnings.length ? `<div class="card"><h3>Formatting warnings</h3><ul>${r.warnings.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}`;
+      <div class="card"><h3>Resume readability: ${esc(r.readability.level)}</h3><div class="t3" style="margin-bottom:6px">A separate check of how easily applicant-tracking software can read the file. Not part of the fit score.</div>
+        ${r.readability.checks.map((c) => `<div class="rq"><span class="ic ${c.ok ? 'matched' : c.level === 'risk' ? 'missing' : 'partial'}">${c.ok ? '✓' : c.level === 'risk' ? '✕' : '!'}</span><div class="grow"><b>${esc(c.title)}</b><div class="ev">${esc(c.detail)}</div>${!c.ok && c.advice ? `<div class="ev t3">${esc(c.advice)}</div>` : ''}</div></div>`).join('')}</div>`;
   }
   function reqRow(x) {
     const mark = { matched: '✓', partial: '≈', missing: '✕' }[x.status];
     const shown = x.status === 'matched' ? (x.demonstrated ? '<span class="tag ok">shown in experience</span>' : '<span class="tag warn">listed only</span>') : '';
     const ev = x.evidence[0];
-    return `<div class="rq"><span class="ic ${x.status}">${mark}</span><div class="grow"><b translate="no">${esc(x.term)}</b><span class="tag">${IMP[x.importance]}</span><span class="tag">${esc(x.category)}</span>${shown}
-      ${x.via ? `<span class="t3"> · via "${esc(x.via)}"${x.status === 'partial' ? ' (related, partial credit)' : ''}</span>` : ''}
-      ${ev ? `<div class="ev">"${esc(ev.text)}" <i>· ${esc(SECTIONS[ev.section] || ev.section)}</i></div>` : x.status === 'missing' ? '<div class="ev t3">Not found in the resume</div>' : ''}</div></div>`;
+    return `<div class="rq"><span class="ic ${x.status}">${mark}</span><div class="grow"><b translate="no">${esc(x.term)}</b><span class="tag ${x.status === 'matched' ? 'ok' : x.status === 'partial' ? 'warn' : 'err'}">${esc(x.matchLabel || x.status)}</span><span class="tag">${esc(x.kind || IMP[x.importance])}</span>${x.hard ? '<span class="tag err">must-have</span>' : ''}${shown}
+      ${x.via ? `<span class="t3"> · as "${esc(x.via)}"</span>` : ''}
+      ${ev ? `<div class="ev">"${esc(x.quote || ev.text)}" <i>· ${esc(ev.source === 'profile' ? 'profile' : 'resume')} · ${esc(SECTIONS[ev.section] || ev.section)}</i></div>` : x.status === 'missing' ? '<div class="ev t3">No evidence found</div>' : ''}
+      ${x.explanation ? `<div class="ev">${esc(x.explanation)}</div>` : ''}${x.recommendation ? `<div class="ev" style="color:var(--accent)">→ ${esc(x.recommendation)}</div>` : ''}${x.note ? `<div class="ev t3">Checked: ${esc(x.note)}</div>` : ''}</div></div>`;
   }
   function weightsHtml() {
     const w = st.weights || st.res.report.weights;
-    const labels = { keywords: 'Keyword coverage', demonstrated: 'Skills shown in experience', responsibilities: 'Relevant experience', industry: 'Industry experience', title: 'Job title alignment', years: 'Years of experience', qualifications: 'Education & certifications', readability: 'ATS readability' };
-    return `<div class="t3" style="margin:6px 0">Relative weights (parts the job doesn't ask about are left out and the rest scaled to 100). Saved on this computer.</div>
+    const labels = st.res.report.labels || {};
+    return `<div class="t3" style="margin:6px 0">JobBid's starting weights, not validated ATS weights. Parts the job doesn't ask about are left out and the rest scaled to 100. Saved on this computer.</div>
       <table>${Object.keys(labels).map((k) => `<tr><td>${labels[k]}</td><td><input type="number" min="0" max="100" step="1" data-w="${k}" value="${esc(w[k] ?? 0)}"></td></tr>`).join('')}</table>
       <div style="margin-top:8px;display:flex;gap:10px"><button class="link" data-act="saveWeights">Save and re-score</button><button class="link" data-act="resetWeights">Reset to defaults</button></div>`;
   }
@@ -338,7 +340,7 @@
       </div>
       <div class="grid2">
         <div class="card"><h3>Why the score changed</h3><ul>${v.explain.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
-          ${b.after.warnings.length ? `<h3 style="margin-top:12px">Formatting warnings in the new file</h3><ul>${b.after.warnings.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>
+          ${b.after.warnings.length ? `<h3 style="margin-top:12px">Readability notes on the new file (not part of the score)</h3><ul>${b.after.warnings.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>
         <div class="card"><h3>Selected keywords, checked in the new file</h3>${v.keywords.length ? `<table><tr><th>Keyword</th><th>Before</th><th>After</th><th></th></tr>
           ${v.keywords.map((k) => `<tr><td><b translate="no">${esc(k.term)}</b><div class="t3">${k.how === 'confirmed' ? 'confirmed by you' : 'to show in experience'}</div>${k.evidence ? `<div class="ev">"${esc(k.evidence.slice(0, 110))}"</div>` : ''}</td>
             <td>${statusTag(k.before)}${k.demonstratedBefore ? '<div class="t3">in experience</div>' : ''}</td><td>${statusTag(k.after)}${k.demonstrated ? '<div class="t3">in experience</div>' : ''}</td><td>${k.done ? '<span class="tag ok">done</span>' : '<span class="tag err">not done</span>'}</td></tr>`).join('')}</table>` : '<div class="t3">No keyword was selected.</div>'}
@@ -393,7 +395,7 @@
       if (c) { const html = previewHtml(); if (html !== lastPreview) { c.innerHTML = html; lastPreview = html; } }
     }, 400);
     let r;
-    try { r = await ctx.api.send({ type, profile: ctx.profile, job: ctx.job, resumeId: st.resumeId, file: st.file, ...extra }); } catch (e) { r = { ok: false, error: e.message }; }
+    try { r = await ctx.api.send({ type, profile: ctx.profile, job: ctx.job, resumeId: st.resumeId, file: st.file, source: ctx.source === 'profile' ? 'resume' : ctx.source, ...extra }); } catch (e) { r = { ok: false, error: e.message }; }
     clearInterval(poll);
     st.busy = '';
     if (!r?.ok || !r.result) {
@@ -403,7 +405,7 @@
       return null;
     }
     const res = r.result;
-    if (type === 'atsScore') notify('ok', `Resume scored: ${fmt(res.report.score)}/100`, `${res.report.counts.matched} matched, ${res.report.counts.partial} partly, ${res.report.counts.missing} missing · ${res.resume.name}`);
+    if (type === 'atsScore') notify('ok', `JobBid Fit Estimate: ${fmt(res.report.score)}/100`, `${res.report.counts.matched} shown, ${res.report.counts.partial} related only, ${res.report.counts.missing} not demonstrated · ${res.resume.name}`);
     if (type === 'atsOptimize') notify('ok', `${res.changes.length} change${res.changes.length === 1 ? '' : 's'} proposed`, `${res.changes.filter((c) => c.safe).length} passed every check, ${res.changes.filter((c) => !c.safe).length} flagged. Review them.`);
     if (type === 'atsBuild') notify('ok', `New resume: ${fmt(res.before.score)} → ${fmt(res.after.score)}`, `${res.verify.present.filter((x) => x.ok).length} change${res.verify.present.length === 1 ? '' : 's'} in the file · ${res.file.name}`);
     return res;

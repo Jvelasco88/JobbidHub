@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Runs the extension's real content.js on saved application forms in headless Chrome and checks what got filled.",
   "scripts": {
-    "test": "node run.mjs && node ats.test.mjs && node optimizer.ui.mjs"
+    "test": "node run.mjs && node ats.test.mjs && node fit.test.mjs && node optimizer.ui.mjs"
   },
   "devDependencies": {
     "puppeteer-core": "24.10.0"

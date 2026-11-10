@@ -80,7 +80,19 @@ function fakeChrome(seed) {
 function fakeAi(aiJob) {
   window.aiStage = () => {};
   window.ai = async (prompt) => {
-    if (prompt.includes('ATS (applicant tracking system) configuration expert')) { await new Promise((r) => setTimeout(r, 1200)); return aiJob; }
+    if (window.__aiDown) throw new Error('All 1 AI keys failed. gemini: 503 overloaded');
+    if (prompt.includes('configuring an applicant tracking system')) { await new Promise((r) => setTimeout(r, 1200)); return aiJob; }
+    // The evidence review: one honest "equivalent" with a real quote, everything else left to the words.
+    if (prompt.includes('You check a job candidate\'s evidence')) {
+      await new Promise((r) => setTimeout(r, 400));
+      const reqId = (term) => (prompt.match(new RegExp(`^(r\\d+) \\([^)]*\\) ${term}`, 'm')) || [])[1];
+      const line = (start) => Number((prompt.match(new RegExp(`^\\[(\\d+)\\] \\([^)]*\\) ${start}`, 'm')) || [])[1]);
+      return {
+        results: [{ id: reqId('Predictive Modeling'), status: 'equivalent', lines: [line('Built statistical models')], quote: 'statistical models for demand forecasting', explanation: 'Forecasting models are predictive models.', recommendation: 'Call the forecasting work predictive modeling and say how you evaluated it.' }],
+        summary: { status: 'weak', explanation: 'The summary does not mention machine learning in production.', recommendation: 'Lead with the ML services you built in Python.' },
+        suggestions: [{ text: 'Your resume mentions ranking services; say how they were deployed and monitored.', lines: [line('Built ML ranking')] }],
+      };
+    }
     await new Promise((r) => setTimeout(r, 1500));
     const id = (start) => { const m = prompt.match(new RegExp('\\[(\\d+)\\] \\([^)]*\\) ' + start.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))); return m ? Number(m[1]) : -1; };
     return {
@@ -127,13 +139,26 @@ async function run(kind) {
 
   await until('the Match tab shows the ATS card', () => inPanel("return !!r.getElementById('atsRun')"));
   await inPanel("r.getElementById('atsRun').click()");
-  const scoring = await until('the panel shows the steps while scoring', () => inPanel("const li = [...r.querySelectorAll('ol.atsteps li')]; return li.length === 3 && li[0].classList.contains('now') ? li.map((x) => x.textContent.replace(/\s+/g, ' ').trim()) : null"));
-  check('panel steps: reading the job first', scoring && /Read the job/.test(scoring[0]) && /Score it/.test(scoring[2]), JSON.stringify(scoring));
-  const score = await until('the resume is scored', () => inPanel("const n = r.querySelector('.card .ats .num'); return n && /\\/100/.test(n.textContent) ? n.textContent : ''"));
-  check('the card shows a score out of 100', !!score, score);
+  const scoring = await until('the panel shows the steps while scoring', () => inPanel("const li = [...r.querySelectorAll('ol.atsteps li')]; return li.length === 5 && li[0].classList.contains('now') ? li.map((x) => x.textContent.replace(/\\s+/g, ' ').trim()) : null"));
+  check('panel steps: job, resume, profile, AI review, score', scoring && /Read the job/.test(scoring[0]) && /AI reviews/.test(scoring[3]) && /Score it/.test(scoring[4]), JSON.stringify(scoring));
+  const score = await until('the fit is scored', () => inPanel("const n = r.querySelector('.fitnum'); return n && /\\/100/.test(n.textContent) ? n.textContent : ''"));
+  check('the card shows "JobBid Fit Estimate" out of 100 with a band', !!score && await inPanel("return /JobBid Fit Estimate/.test(r.getElementById('body').textContent) && /(Strong|Good|Partial|Limited) alignment/.test(r.getElementById('body').textContent)"), score);
+  check('labelled AI-reviewed', await inPanel("return /AI-reviewed/.test(r.getElementById('body').textContent)"));
   await shot('1-card');
-  check('the card shows missing requirements', await inPanel("return [...r.querySelectorAll('.chip.miss')].some((c) => /Snowflake/.test(c.textContent))"));
-  check('the card says it is an estimate', await inPanel("return /an estimate, not the employer/.test(r.getElementById('body').textContent)"));
+  if (process.env.SHOTS) {
+    await page.setViewport({ width: 1400, height: 2600 });
+    await inPanel("r.querySelectorAll('details.cmp').forEach((d, i) => { d.open = i < 4; }); r.querySelector('details.rd').open = true; r.getElementById('body').style.maxHeight = 'none'; r.querySelector('.panel').style.maxHeight = 'none';");
+    await new Promise((res) => setTimeout(res, 300));
+    await page.screenshot({ path: path.join(process.env.SHOTS, `${kind}-1b-tall.png`), clip: { x: 0, y: 0, width: 380, height: 2600 } });
+    await page.setViewport({ width: 1400, height: 900 });
+  }
+  const rows = await inPanel("return [...r.querySelectorAll('details.cmp .cl')].map((x) => x.textContent)");
+  check('Resume vs job rows: title, years, industry, required, preferred, responsibilities, education, summary', ['Job title', 'Years', 'Industry', 'Required skills', 'Preferred skills', 'Responsibilities', 'Education', 'Summary'].every((t) => rows?.includes(t)), JSON.stringify(rows));
+  check('a missing requirement is listed with its status', await inPanel("return [...r.querySelectorAll('.rqi')].some((x) => /Snowflake/.test(x.textContent) && /Not shown/.test(x.textContent))"));
+  check('an equivalent match shows the resume\'s words and why', await inPanel("return [...r.querySelectorAll('.rqi')].some((x) => /Predictive Modeling/.test(x.textContent) && /Equivalent/.test(x.textContent) && /demand forecasting/.test(x.textContent) && /Forecasting models are predictive/.test(x.textContent))"));
+  check('AI suggestions built on real lines', await inPanel("return /How to improve[\\s\\S]*deployed and monitored/.test(r.getElementById('body').textContent)"));
+  check('readability is a separate check, not in the score', await inPanel("return /Resume readability/.test(r.getElementById('body').textContent) && /Not part of the fit score/.test(r.getElementById('body').textContent)"));
+  check('the card says it is an estimate', await inPanel("return /An estimate, not the employer/.test(r.getElementById('body').textContent)"));
 
   if (process.env.SHOTS) { await inPanel("r.getElementById('atsDetail').click()"); await new Promise((r) => setTimeout(r, 400)); await shot('0-score'); await inOpt("r.querySelector('[data-act=close]').click()"); }
   await inPanel("r.getElementById('atsOpt').click()");
@@ -148,7 +173,7 @@ async function run(kind) {
     await inOpt("const i = r.querySelector('input[data-act=mode][value=rebuild]'); i.checked = true; i.dispatchEvent(new Event('change', { bubbles: true }))");
   }
   await inOpt("r.querySelector('[data-act=optimize]').click()");
-  const during = await until('steps are shown while the AI works', () => inOpt("const li = [...r.querySelectorAll('ol.steps li')]; return li.length === 4 && li[2].classList.contains('now') ? li.map((x) => x.className + ':' + x.textContent.replace(/\\s+/g, ' ').trim()) : null"));
+  const during = await until('steps are shown while the AI works', () => inOpt("const li = [...r.querySelectorAll('ol.steps li')]; return li.length === 5 && li[3].classList.contains('now') ? li.map((x) => x.className + ':' + x.textContent.replace(/\\s+/g, ' ').trim()) : null"));
   await shot('2b-optimizing');
   check('while the AI works: job and resume steps done, AI step running', during && /done|skip/.test(during[0]) && /^done/.test(during[1]), JSON.stringify(during));
   check('while the AI works: what it was asked is shown', await inOpt("return /What the AI is asked to do[\\s\\S]*Docker/.test(r.getElementById('preview').textContent)"));
@@ -181,17 +206,50 @@ async function run(kind) {
   await inOpt("r.querySelector('[data-act=use]').click()");
   const held = await until('the file is handed to the application', () => page.evaluate(() => window.__held));
   // Score the handed-over bytes again, independently: the same number as shown.
-  const rescored = held && await page.evaluate(async (f) => (await window.atsScore({ profile: window.__mem.profiles[0], job: { title: document.querySelector('h1').textContent, company: 'Example Health', url: location.href, description: document.getElementById('job-description').innerText.replace(/\s+/g, ' ') }, file: f })).report.score, held);
+  const rescored = held && await page.evaluate(async (f) => { const j = window.__jobbid.getJob(); return (await window.atsScore({ profile: window.__mem.profiles[0], job: { title: j.title, company: j.company, url: j.url, description: j.description }, file: f })).report.score; }, held);
   check('the attached file is exactly the scored one', held && Math.abs(rescored - res.big[1]) < 0.05 && held.score === res.big[1], `${rescored} vs ${res?.big[1]}`);
   check('the attached file keeps its name and type', held?.name === name && (kind === 'pdf' ? held.type === 'application/pdf' : held.type === DOCX));
   await inOpt("r.querySelector('[data-act=close]').click()");
-  await until('the panel shows the optimized version', () => inPanel("return /Optimized version/.test(r.getElementById('body').textContent)"));
+  await until('the panel shows the optimized version', () => inPanel("return /Optimized resume:/.test(r.getElementById('body').textContent)"));
+  // Evidence: resume + profile, analyzed again.
+  await inPanel("const s = r.getElementById('atsSrc'); s.value = 'both'; s.dispatchEvent(new Event('change', { bubbles: true }))");
+  await until('the evidence choice changes', () => inPanel("return !!r.getElementById('atsRun')"));
+  await inPanel("r.getElementById('atsRun').click()");
+  await until('scored with resume + profile', () => inPanel("return /Resume \\+ profile/.test(r.querySelector('.fithead')?.textContent || '')"));
+  check('the evidence used is shown (resume + profile)', await inPanel("return /Resume \\+ profile/.test(r.querySelector('.fithead')?.textContent || '')"));
   check('no page errors', !errors.length, errors.join(' | '));
   await page.close();
 }
 
 await run('docx');
 await run('pdf');
+
+// The AI down: the result is labelled "rules only", never shown as AI-analyzed.
+{
+  console.log('Fit estimate with the AI down');
+  const seed = { profiles: [{ id: 'p1', fullName: 'Alex Rivera', resumes: [{ id: 'r1', name: 'Alex_Rivera.docx', type: DOCX }], defaultResumeId: 'r1' }],
+    settings: { activeProfileId: 'p1', aiKeys: [{ id: 'k', provider: 'gemini', key: 'x', enabled: true }] }, hubConfig: { token: 't', user: 'tester' }, panelTab: 'match', panelCollapsed: false,
+    file_r1: Buffer.from(makeDocx(RESUME_ML)).toString('base64') };
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.evaluateOnNewDocument(fakeChrome, seed);
+  await page.goto(url, { waitUntil: 'load' });
+  await page.evaluate(fakeAi, AI_ML);
+  await page.evaluate(() => { window.__aiDown = true; });
+  await page.addScriptTag({ content: lib + '\n;\n' + atsBg + '\nwindow.atsScore = atsScore; window.atsOptimize = atsOptimize; window.atsBuild = atsBuild;' });
+  for (const code of ui) await page.addScriptTag({ content: code });
+  const inPanel = (fn) => page.evaluate((src) => { const r = document.querySelector('#jobbid-root-panel')?.shadowRoot; return r ? new Function('r', src)(r) : null; }, fn);
+  const until = async (test, ms = 20000) => { const t0 = Date.now(); for (;;) { const v = await test(); if (v || Date.now() - t0 > ms) return v; await new Promise((r) => setTimeout(r, 150)); } };
+  await until(() => inPanel("return !!r.getElementById('atsRun')"));
+  await inPanel("r.getElementById('atsRun').click()");
+  const ok = await until(() => inPanel("return !!r.querySelector('.fitnum')"));
+  const text = ok ? await inPanel("return r.getElementById('body').textContent") : '';
+  check('AI down: still a score, from the posting\'s words', !!ok);
+  check('AI down: labelled "Rules only" with the reason', /Rules only/.test(text) && /503 overloaded/.test(text) && !/AI-reviewed/.test(text), text.slice(0, 300));
+  check('AI down: no page errors', !errors.length, errors.join(' | '));
+  await page.close();
+}
 await browser.close();
 server.close();
 console.log(`\n${failed ? 'FAILED' : 'OK'}: ${passed} passed, ${failed} failed`);

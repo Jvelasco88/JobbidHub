@@ -103,7 +103,7 @@
     schedule();
   });
 
-  // Skill match: which known skills in the job description the candidate has.
+  // Known skill names: shown as the job's skills on the Job tab when the AI has not read the job (not used for scoring).
   const SKILLS = ['python', 'java', 'javascript', 'typescript', 'go', 'golang', 'rust', 'c++', 'c#', 'scala', 'kotlin', 'swift', 'ruby', 'php', 'r', 'sql', 'nosql', 'bash',
     'react', 'next.js', 'angular', 'vue', 'node.js', 'express', 'django', 'flask', 'fastapi', 'spring', 'spring boot', '.net', 'graphql', 'rest', 'grpc', 'microservices',
     'html', 'css', 'tailwind', 'redux', 'aws', 'azure', 'gcp', 'google cloud', 'lambda', 's3', 'ec2', 'eks', 'ecs', 'sagemaker', 'bedrock', 'vertex ai', 'docker', 'kubernetes',
@@ -116,201 +116,6 @@
     'salesforce', 'hubspot', 'figma', 'react native', 'flutter', 'ios', 'android', 'unity', 'blockchain', 'solidity', 'web3', 'a/b testing', 'statistics', 'excel'];
   const skillRe = (s) => new RegExp(`(^|[^a-z0-9+#.])${s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?![a-z0-9+#])`, 'i');
   const SKILL_RES = SKILLS.map((s) => [s, skillRe(s)]);
-  // How each skill is normally written ("fastapi" -> "FastAPI").
-  const SKILL_NAMES = { javascript: 'JavaScript', typescript: 'TypeScript', 'c++': 'C++', 'c#': 'C#', php: 'PHP', sql: 'SQL', nosql: 'NoSQL', 'next.js': 'Next.js', 'node.js': 'Node.js',
-    fastapi: 'FastAPI', '.net': '.NET', graphql: 'GraphQL', rest: 'REST', grpc: 'gRPC', html: 'HTML', css: 'CSS', aws: 'AWS', gcp: 'GCP', s3: 'S3', ec2: 'EC2', eks: 'EKS', ecs: 'ECS',
-    sagemaker: 'SageMaker', 'ci/cd': 'CI/CD', postgresql: 'PostgreSQL', mysql: 'MySQL', mongodb: 'MongoDB', dynamodb: 'DynamoDB', opensearch: 'OpenSearch', bigquery: 'BigQuery',
-    pyspark: 'PySpark', dbt: 'dbt', etl: 'ETL', elt: 'ELT', 'power bi': 'Power BI', numpy: 'NumPy', 'scikit-learn': 'scikit-learn', pytorch: 'PyTorch', tensorflow: 'TensorFlow',
-    jax: 'JAX', llm: 'LLM', llms: 'LLMs', genai: 'GenAI', rag: 'RAG', langchain: 'LangChain', llamaindex: 'LlamaIndex', openai: 'OpenAI', gpt: 'GPT', bert: 'BERT', nlp: 'NLP',
-    opencv: 'OpenCV', mlops: 'MLOps', mlflow: 'MLflow', vllm: 'vLLM', lora: 'LoRA', faiss: 'FAISS', pgvector: 'pgvector', devops: 'DevOps', sre: 'SRE', oauth: 'OAuth',
-    hubspot: 'HubSpot', ios: 'iOS', 'generative ai': 'Generative AI', 'google cloud': 'Google Cloud', 'hugging face': 'Hugging Face', 'vector database': 'vector database', web3: 'Web3', 'a/b testing': 'A/B testing', 'github actions': 'GitHub Actions', gitlab: 'GitLab', 'vertex ai': 'Vertex AI', 'sql server': 'SQL Server' };
-  const skillName = (s) => SKILL_NAMES[s] || s.replace(/(^|\s)\S/g, (c) => c.toUpperCase());
-
-  // Same skill under another name: full credit.
-  const SKILL_SAME = [['llm', 'llms', 'large language model', 'large language models'], ['genai', 'generative ai'], ['go', 'golang'], ['postgresql', 'postgres'],
-    ['gcp', 'google cloud'], ['rest', 'restful', 'rest api', 'rest apis'], ['fine-tuning', 'fine tuning', 'finetuning'], ['rag', 'retrieval-augmented', 'retrieval augmented'],
-    ['a/b testing', 'a/b test', 'ab testing', 'experimentation'], ['ci/cd', 'cicd', 'continuous integration'], ['node.js', 'nodejs'], ['next.js', 'nextjs'],
-    ['security', 'cybersecurity', 'secure coding', 'appsec'], ['gpt', 'chatgpt', 'openai']];
-  // Same family: half credit (knowing LlamaIndex says something about LangChain).
-  const SKILL_FAMILY = [
-    ['llm', 'llms', 'genai', 'generative ai', 'gpt', 'openai', 'rag', 'langchain', 'llamaindex', 'hugging face', 'transformers', 'fine-tuning', 'lora', 'vllm', 'embeddings', 'vector database', 'bedrock', 'vertex ai', 'bert', 'nlp'],
-    ['machine learning', 'deep learning', 'pytorch', 'tensorflow', 'keras', 'jax', 'scikit-learn', 'mlops', 'mlflow', 'kubeflow', 'sagemaker', 'computer vision', 'statistics', 'a/b testing'],
-    ['aws', 'azure', 'gcp', 'google cloud', 'lambda', 's3', 'ec2', 'eks', 'ecs'], ['docker', 'kubernetes', 'terraform', 'ansible', 'jenkins', 'github actions', 'ci/cd', 'devops', 'sre'],
-    ['react', 'angular', 'vue', 'next.js', 'redux', 'react native'], ['node.js', 'express', 'django', 'flask', 'fastapi', 'spring', 'spring boot', '.net', 'rest', 'graphql', 'grpc', 'microservices'],
-    ['postgresql', 'postgres', 'mysql', 'sql server', 'oracle', 'sql', 'mongodb', 'dynamodb', 'cassandra', 'redis', 'nosql'],
-    ['spark', 'pyspark', 'hadoop', 'hive', 'kafka', 'kinesis', 'airflow', 'dbt', 'flink', 'etl', 'elt', 'snowflake', 'redshift', 'bigquery', 'databricks', 'data warehouse', 'data lake'],
-    ['tableau', 'power bi', 'looker', 'excel'], ['java', 'kotlin', 'scala'], ['javascript', 'typescript'], ['c++', 'c#', 'rust', 'go']];
-  const reCache = new Map();
-  const has = (corpus, s) => { if (!reCache.has(s)) reCache.set(s, skillRe(s)); return reCache.get(s).test(corpus); };
-  const profileText = (p) => [p.headline, p.currentTitle, p.summary, ...(p.skills || []), ...(p.experience || []).flatMap((e) => [e.title, e.company, e.description]),
-    ...(p.education || []).flatMap((e) => [e.degree, e.field])].filter(Boolean).join('\n').toLowerCase();
-
-  // Skills the job asks for: literal (what an ATS sees), and by meaning (same skill / same family).
-  function skillMatch(job, p, extra = '') {
-    const jd = (job.title + '\n' + job.description).toLowerCase();
-    const wanted = SKILL_RES.filter(([, re]) => re.test(jd)).map(([s]) => s).filter((s, i, a) => !(s === 'llm' && a.includes('llms')));
-    if (wanted.length < 3) return null;
-    const corpus = profileText(p) + '\n' + String(extra).toLowerCase();
-    const have = [], related = [], missing = [];
-    for (const s of wanted) {
-      if (has(corpus, s) || SKILL_SAME.some((g) => g.includes(s) && g.some((x) => has(corpus, x)))) have.push(s);
-      else if (SKILL_FAMILY.some((g) => g.includes(s) && g.some((x) => x !== s && has(corpus, x)))) related.push(s);
-      else missing.push(s);
-    }
-    const literal = wanted.filter((s) => has(corpus, s) || (s.endsWith('s') ? has(corpus, s.slice(0, -1)) : has(corpus, s + 's')));
-    return { pct: Math.round(((have.length + related.length / 2) / wanted.length) * 100), have, related, missing, literal, wanted };
-  }
-
-  // How much each job keyword matters, like an ATS weighs it: 2 = main skill (in the job title, named twice
-  // or more, or on a "required / must have" line), 0.5 = only on a "nice to have / preferred / bonus" line, 1 = the rest.
-  function keywordWeights(job, wanted) {
-    const title = String(job.title || '').toLowerCase();
-    const NICE = /\b(nice to have|nice-to-have|preferred|bonus|a plus|is a plus|plus if|good to have|desirable|ideally|familiarity with)\b/;
-    const MUST = /\b(required|requirements?|must[- ]have|must have|you have|you bring|what you.?ll need|qualifications?|proficien\w*|strong (experience|knowledge)|expert\w*)\b/;
-    const OTHER = /\b(responsibilit\w*|what you.?ll do|about (us|the (role|team|company))|benefits|perks|compensation|why join)\b/;
-    // Each line belongs to the section above it ("Requirements:" then bullets), or says so itself.
-    let section = '';
-    const lines = String(job.description || '').toLowerCase().split(/\n|(?<=[.;])\s+/).map((l) => {
-      const head = l.trim().length < 60;
-      if (head && NICE.test(l)) section = 'nice';
-      else if (head && MUST.test(l)) section = 'must';
-      else if (head && OTHER.test(l)) section = '';
-      return { l, kind: NICE.test(l) ? 'nice' : MUST.test(l) ? 'must' : section };
-    });
-    const w = {};
-    for (const s of wanted) {
-      const re = reCache.get(s) || skillRe(s);
-      const hits = lines.filter((x) => re.test(x.l));
-      if (re.test(title) || hits.length >= 2 || hits.some((x) => x.kind === 'must')) w[s] = 2;
-      else if (hits.length && hits.every((x) => x.kind === 'nice')) w[s] = 0.5;
-      else w[s] = 1;
-    }
-    return w;
-  }
-
-
-  // ---------- Match: experience, skills, industry and title, like a recruiter's first look ----------
-  const INDUSTRIES = {
-    Healthcare: /\b(health ?care|clinical|hospital|patient|medical|ehr|hipaa|telehealth)\b/g,
-    'Biotech / Pharma': /\b(biotech\w*|pharma\w*|biopharma|life sciences?|drug discovery|genomic\w*|biolog\w*|regenerative|precision medicine)\b/g,
-    'Finance / Fintech': /\b(fintech|banking|bank|financial services|trading|payments?|lending|capital markets|wealth|asset management|credit)\b/g,
-    Insurance: /\b(insurance|insurtech|underwriting|claims)\b/g,
-    'E-commerce / Retail': /\b(e-?commerce|retail|marketplace|shopping|merchants?)\b/g,
-    'Education': /\b(edtech|education|learning platform|students|universit(y|ies))\b/g,
-    'Government / Defense': /\b(government|federal|defense|public sector|dod|national security|clearance)\b/g,
-    'Media / Advertising': /\b(adtech|advertising|media|marketing technology|publishing|streaming)\b/g,
-    Gaming: /\b(gaming|video games?|game studio)\b/g,
-    Automotive: /\b(automotive|autonomous vehicles?|self-driving|ev charging)\b/g,
-    Telecom: /\b(telecom\w*|wireless|5g|network operator)\b/g,
-    Energy: /\b(energy|utilities|oil and gas|renewable|solar|grid)\b/g,
-    'Logistics / Supply chain': /\b(logistics|supply chain|freight|shipping|warehouse management)\b/g,
-    'Real estate': /\b(real estate|proptech|mortgage|property management)\b/g,
-    Cybersecurity: /\b(cybersecurity|security operations|threat detection|soc 2|siem|zero trust)\b/g,
-    'Travel / Hospitality': /\b(travel|hospitality|hotels?|airlines?|booking)\b/g,
-    'HR / Recruiting': /\b(hr tech|recruiting|talent acquisition|payroll|workforce)\b/g,
-    'Crypto / Web3': /\b(crypto\w*|blockchain|web3|defi)\b/g,
-    Manufacturing: /\b(manufacturing|industrial|factory|robotics)\b/g,
-    Legal: /\b(legal tech|law firm|legal)\b/g,
-  };
-  function industriesIn(text, min) {
-    const t = String(text || '').toLowerCase();
-    return Object.entries(INDUSTRIES).map(([name, re]) => [name, (t.match(re) || []).length]).filter(([, n]) => n >= min).sort((a, b) => b[1] - a[1]).map(([n]) => n);
-  }
-
-  const LEVEL_YEARS = { intern: 0, entry: 0, junior: 1, jr: 1, associate: 2, mid: 3, senior: 5, sr: 5, staff: 8, lead: 7, principal: 10, director: 10, head: 10, architect: 8 };
-  function profileYears(p) {
-    const y = parseFloat(p.yearsExperience);
-    if (Number.isFinite(y) && y > 0) return y;
-    let months = 0;
-    for (const e of p.experience || []) {
-      const d = (s) => { const m = String(s || '').match(/(?:(\d{1,2})\/)?(\d{4})/); return m ? Number(m[2]) * 12 + (Number(m[1]) || 1) : null; };
-      const a = d(e.start), b = /present|current|now/i.test(e.end || '') ? new Date().getFullYear() * 12 + new Date().getMonth() + 1 : d(e.end);
-      if (a && b && b > a) months += b - a;
-    }
-    return months ? Math.round(months / 12) : null;
-  }
-  // Years the job asks for. A range ("1-7 years") also gives its top, so 10 years isn't "overqualified" there.
-  let lastYearsMax = null;
-  function requiredYears(text) {
-    let best = null, top = null;
-    for (const m of String(text || '').matchAll(/(\d{1,2})\s*\+?\s*(?:(?:-|–|to)\s*(\d{1,2})\s*)?\+?\s*years?(?:'|’)?\s+(?:of\s+)?(?:\w+\s+){0,4}?(?:experience|exp\b|working|in\b|building|developing)/gi)) {
-      const n = Number(m[1]);
-      if (n >= 1 && n <= 15 && (best == null || n > best)) { best = n; top = m[2] ? Number(m[2]) : null; }
-    }
-    lastYearsMax = top;
-    return best;
-  }
-
-  const TITLE_STOP = new Set(['senior', 'sr', 'junior', 'jr', 'staff', 'lead', 'principal', 'head', 'of', 'and', 'the', 'i', 'ii', 'iii', 'iv', 'a', 'an', 'to', 'for', 'in', 'remote', 'hybrid', 'mid', 'level', 'associate']);
-  const TITLE_SAME = { developer: 'engineer', programmer: 'engineer', swe: 'engineer', sde: 'engineer', ml: 'machine', ai: 'machine', llm: 'machine', genai: 'machine', fullstack: 'full', frontend: 'front', backend: 'back' };
-  const titleWords = (s) => new Set(String(s || '').toLowerCase().replace(/[^a-z0-9+#]+/g, ' ').split(' ').filter((w) => w && !TITLE_STOP.has(w)).map((w) => TITLE_SAME[w] || w.replace(/s$/, '')));
-  function titleScore(job, p) {
-    const want = titleWords(job.title);
-    if (!want.size) return null;
-    const mine = [p.headline, p.currentTitle, ...(p.experience || []).slice(0, 3).map((e) => e.title)].filter(Boolean);
-    let best = 0, bestTitle = '';
-    for (const t of mine) {
-      const w = titleWords(t);
-      const common = [...want].filter((x) => w.has(x)).length;
-      const s = w.size ? (2 * common) / (want.size + w.size) : 0;
-      if (s > best) { best = s; bestTitle = t; }
-    }
-    return { pct: Math.round(25 + 75 * best), mine: bestTitle || mine[0] || '' };
-  }
-
-  // A quick score from the page and the profile (no AI). The AI version replaces it when asked.
-  // extra: the text of a resume fixed for this job, so its new keywords count.
-  function matchAnalysis(job, p, extra = '') {
-    const skills = skillMatch(job, p, extra);
-    const jd = job.title + '\n' + job.description;
-    const yrs = profileYears(p);
-    const req = requiredYears(job.description);
-    const lvl = (job.title.toLowerCase().match(/\b(intern|entry|junior|jr|associate|mid|senior|sr|staff|lead|principal|director|head|architect)\b/) || [])[1];
-    const need = req ?? (lvl ? LEVEL_YEARS[lvl] : null);
-    let exp = 80;
-    const needMax = req != null ? lastYearsMax : null;
-    // Far more years than a junior role asks for reads as overqualified to a recruiter (not to an ATS).
-    const over = need != null && yrs != null && need <= 2 && yrs > (needMax ?? need) + 8;
-    if (need != null && yrs != null) exp = yrs >= need ? (over ? 70 : 95) : Math.max(15, Math.round(95 * (yrs / Math.max(1, need))));
-    // An ATS only filters out too FEW years.
-    const atsExp = over ? 95 : exp;
-    const jobInd = industriesIn(jd, 2).slice(0, 4);
-    const myInd = industriesIn(profileText(p) + '\n' + String(extra).toLowerCase(), 1);
-    const shared = jobInd.filter((x) => myInd.includes(x));
-    const industry = !jobInd.length ? 75 : Math.round(45 + 55 * (shared.length / jobInd.length));
-    const title = titleScore(job, p);
-    const skillPct = skills ? skills.pct : 70;
-    const overall = Math.round(0.45 * skillPct + 0.35 * exp + 0.1 * industry + 0.1 * (title ? title.pct : 70));
-    // ATS keywords: exact word = full credit, the same skill under another name ("Postgres") = 0.8,
-    // a related tool of the same family = 0.25. Main skills count double, "nice to have" ones half.
-    let kw = 0.7;
-    const kwState = {};
-    if (skills) {
-      const weights = keywordWeights(job, skills.wanted);
-      let got = 0, total = 0;
-      for (const s of skills.wanted) {
-        const st = skills.literal.includes(s) ? 'have' : skills.have.includes(s) ? 'same' : skills.related.includes(s) ? 'close' : 'miss';
-        kwState[s] = st;
-        got += weights[s] * { have: 1, same: 0.8, close: 0.25, miss: 0 }[st];
-        total += weights[s];
-      }
-      kw = total ? got / total : 0.7;
-    }
-    const ats = Math.round(10 * (0.6 * kw + 0.15 * ((title?.pct ?? 70) / 100) + 0.15 * (atsExp / 100) + 0.1 * (industry / 100)) * 10) / 10;
-    const tips = [];
-    // Words to add: the ones the resume doesn't literally contain (main skills first).
-    const missingKw = skills ? skills.wanted.filter((s) => !skills.literal.includes(s)).sort((a, b) => (kwState[a] === 'miss') - (kwState[b] === 'miss')) : [];
-    if (missingKw.length) tips.push(`Add these words to the resume if you have used them: ${missingKw.slice(0, 6).map(skillName).join(', ')}.`);
-    if (title && title.pct < 60) tips.push(`Your title (${title.mine || 'not set'}) is far from "${job.title}". A tailored resume headline helps the ATS.`);
-    if (jobInd.length && !shared.length) tips.push(`No ${jobInd.slice(0, 2).join(' or ')} experience shows in the profile. Mention any related project or domain work.`);
-    if (need != null && yrs != null && yrs < need) tips.push(`The job asks for about ${need}+ years; the profile shows ${yrs}.`);
-    return {
-      overall, ats, experience: exp, skills: skillPct, industry, title: title?.pct ?? 70,
-      yrs, need, jobInd, shared, myTitle: title?.mine || '', skillInfo: skills,
-      keywords: skills ? skills.wanted.map((s) => ({ k: skillName(s), have: skills.literal.includes(s), close: kwState[s] === 'same' || kwState[s] === 'close' })) : [],
-      tips,
-    };
-  }
 
   // ---------- Job details without AI (used instantly, and as a fallback) ----------
 
@@ -407,6 +212,7 @@
       .grow { flex:1; min-width:0; }
       .ellip { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .t2 { color:var(--t2); font-size:12px; }
+      .t3 { color:var(--t3); font-size:11px; }
       .jtitle { font-size:17px; line-height:22px; font-weight:700; }
       .drow { display:flex; align-items:flex-start; gap:10px; color:var(--t2); }
       .drow > svg { margin-top:1px; color:var(--t3); }
@@ -486,6 +292,32 @@
       .atsteps li.fail .d { background:var(--errbg); color:var(--err); } .atsteps li.fail .t3 { color:var(--err); }
       .atsteps li.now .d { background:transparent; border:2.5px solid var(--stroke); border-top-color:var(--accent); animation:spin .9s linear infinite; }
       .atsteps li.todo b { color:var(--t3); font-weight:600; }
+      .fit .fithead { display:flex; gap:10px; align-items:flex-start; }
+      .fitnum { font-size:34px; font-weight:800; line-height:36px; } .fitnum small { font-size:12px; color:var(--t3); font-weight:600; }
+      .fit .band { font-weight:700; font-size:14px; margin:2px 0; }
+      .badge { display:inline-block; font-size:10.5px; font-weight:700; padding:0 6px; border-radius:6px; background:var(--bg); color:var(--t2); }
+      .badge.ok { background:var(--okbg); color:var(--ok); } .badge.warn { background:var(--warnbg); color:var(--warn); } .badge.err { background:var(--errbg); color:var(--err); }
+      .fitctl { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; } .fitctl label { display:flex; gap:4px; align-items:center; font-size:11.5px; color:var(--t3); flex:1; min-width:0; }
+      .fitctl select.mini { flex:1; min-width:0; font:inherit; font-size:12px; padding:4px 6px; border-radius:8px; border:1px solid var(--stroke); background:var(--card); color:var(--text); }
+      details.diff { margin-top:8px; font-size:12px; } details.diff summary { cursor:pointer; color:var(--accent); font-weight:600; }
+      .cmphd, details.cmp > summary { display:grid; grid-template-columns: 88px 1fr 1fr 48px; gap:6px; align-items:start; font-size:12px; }
+      .cmphd { color:var(--t3); font-size:10.5px; font-weight:700; text-transform:uppercase; margin-top:8px; padding-bottom:3px; border-bottom:1px solid var(--stroke); }
+      details.cmp { border-bottom:1px solid var(--stroke); } details.cmp > summary { list-style:none; cursor:pointer; padding:7px 0; } details.cmp > summary::-webkit-details-marker { display:none; }
+      details.cmp .cl { font-weight:700; font-size:11.5px; overflow-wrap:anywhere; } details.cmp .cj, details.cmp .cr { color:var(--t2); overflow-wrap:anywhere; }
+      details.cmp .st { justify-self:end; font-size:10.5px; font-weight:700; padding:1px 6px; border-radius:6px; }
+      .st.ok { background:var(--okbg); color:var(--ok); } .st.warn { background:var(--warnbg); color:var(--warn); } .st.err { background:var(--errbg); color:var(--err); } .st.na { background:var(--bg); color:var(--t3); }
+      details.cmp .cb { padding:0 0 8px; }
+      .rqg { font-size:11px; font-weight:700; color:var(--t3); text-transform:uppercase; margin:8px 0 2px; }
+      .rqi { padding:6px 0; border-top:1px dashed var(--stroke); font-size:12px; } .rqg + .rqi { border-top:0; }
+      .rqh { display:flex; gap:6px; align-items:baseline; flex-wrap:wrap; }
+      .mchip { font-size:10px; font-weight:700; padding:0 6px; border-radius:6px; }
+      .m-direct, .m-equivalent { background:var(--okbg); color:var(--ok); } .m-related { background:var(--warnbg); color:var(--warn); } .m-none, .m-contradiction { background:var(--errbg); color:var(--err); }
+      .rqi .ev { color:var(--t2); margin-top:2px; } .rqi .ev i { color:var(--t3); font-style:normal; }
+      .ex { color:var(--t2); margin-top:2px; font-size:12px; }
+      .rec { display:flex; gap:4px; color:var(--accent); margin-top:3px; font-size:12px; } .rec svg { width:12px; height:12px; margin-top:3px; flex:none; }
+      .t3.chk { font-size:10.5px; }
+      details.rd summary { cursor:pointer; list-style:none; display:flex; gap:8px; align-items:center; } details.rd summary::-webkit-details-marker { display:none; }
+      .rdc { padding:6px 0; border-top:1px dashed var(--stroke); font-size:12px; } .rdc.risk b { color:var(--err); } .rdc.warn b { color:var(--warn); } .rdc.ok b { color:var(--ok); }
       .acts select.mini { flex:1; min-width:0; font:inherit; font-size:12px; padding:6px; border-radius:10px; border:1px solid var(--stroke); background:var(--card); color:var(--text); }
       .acts button svg { width:14px; height:14px; vertical-align:-2px; margin-right:6px; }
       .fixbox { display:flex; flex-direction:column; gap:8px; }
@@ -766,7 +598,7 @@
   let jobState = { key: '' };
 
   async function loadData() {
-    data = { ...data, ...(await store.get(['profiles', 'settings', 'schedule', 'applications', 'panelCollapsed', 'panelTab', 'keyHealth', 'ipInfo', 'panelWidth', 'hubConfig', 'hubState', 'panelPos', 'tabTop', 'aiStatus', 'extUpdate', 'atsProgress'])) };
+    data = { ...data, ...(await store.get(['profiles', 'settings', 'schedule', 'applications', 'panelCollapsed', 'panelTab', 'keyHealth', 'ipInfo', 'panelWidth', 'hubConfig', 'hubState', 'panelPos', 'tabTop', 'aiStatus', 'extUpdate', 'atsProgress', 'atsSource'])) };
     panelW = clampW(data.panelWidth);
     pos = data.panelPos && Number.isFinite(data.panelPos.x) ? data.panelPos : null;
     tabTop = Number.isFinite(data.tabTop) ? data.tabTop : null;
@@ -866,11 +698,10 @@
     ensureJobAnalysis(job);
     const d = jobState.details || guessDetails(job);
     const loading = jobState.status === 'loading';
-    const match = skillMatch(job, p);
+    // The fit estimate for this job, when it was made (Match tab); never the old fixed skill list.
+    const fit = atsState.key === atsKeyOf(job, p) && atsState.status === 'done' ? atsState.res.report : null;
     const sk = (w, h = 14) => `<div class="sk" style="width:${w};height:${h}px"></div>`;
     const row = (icon, value, empty) => `<div class="drow ${value ? '' : 'muted'}">${svg(icon)}<span class="v grow">${value ? esc(value) : (loading ? '' : esc(empty))}</span></div>`;
-    const r = 20, circ = 2 * Math.PI * r;
-    const ringColor = !match ? '' : match.pct >= 70 ? 'var(--ok)' : match.pct >= 40 ? 'var(--warn)' : 'var(--err)';
 
     if (loading && !d.title) {
       return `<div class="cap">Job details</div>
@@ -896,53 +727,37 @@
         ${d.visaSponsorship ? row('shield', `Visa sponsorship: ${d.visaSponsorship}`, '') : ''}
       </div>
       ${d.summary ? `<div class="summary" translate="no">${esc(d.summary)}</div>` : loading ? sk('100%', 36) : ''}
-      ${match ? `<div class="card match">
-          <div class="ring" title="Skill match: ${match.have.length} of ${match.wanted.length} skills in the job description">
-            <svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="${r}" fill="none" stroke="var(--bg)" stroke-width="5"/>
-            <circle cx="26" cy="26" r="${r}" fill="none" stroke="${ringColor}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${(match.pct / 100) * circ} ${circ}"/></svg>${match.pct}%</div>
-          <div class="grow"><div style="display:flex;align-items:center;margin-bottom:4px"><b class="grow">Skill match</b><button class="link" id="toMatch">Full match</button></div>
-            <div class="chips" translate="no">${match.have.slice(0, 8).map((s) => `<span class="chip">${esc(skillName(s))}</span>`).join('')}${match.related.slice(0, 4).map((s) => `<span class="chip rel" title="A related skill is in the profile">${esc(skillName(s))}</span>`).join('')}${match.missing.slice(0, 5).map((s) => `<span class="chip miss" title="Not in ${esc(pname(p))}'s profile">${esc(skillName(s))}</span>`).join('')}</div></div>
-        </div>` : ''}
+      <div class="card match"><div class="grow"><div style="display:flex;align-items:center;margin-bottom:2px"><b class="grow">JobBid Fit Estimate</b><button class="link" id="toMatch">${fit ? 'Details' : 'Analyze the fit'}</button></div>
+          ${fit ? `<div class="t2"><b style="color:${fitColor(fit.score)}">${Math.round(fit.score)}/100</b> · ${esc(fit.band)} · ${fit.counts.matched} of ${fit.counts.total} requirements shown${fit.mode === 'ai' ? '' : ' · rules only'}</div>`
+    : '<div class="t2">See how the resume fits this job\'s own requirements, with the evidence for each.</div>'}</div></div>
       ${loading ? `<div class="thinking"><span class="spin"></span>Understanding job context...</div>`
         : `<div class="row" style="display:flex;align-items:center;gap:8px;color:var(--t3);font-size:11px">${jobState.ai ? 'Analyzed by AI' : jobState.error ? 'AI unavailable - details read from the page' : 'Details read from the page'}
             <span style="flex:1"></span>${aiDown() ? '' : `<button class="link" id="reanalyze">${jobState.ai ? 'Re-analyze' : 'Analyze with AI'}</button>`}</div>`}`;
   }
 
-  // Match tab: { key, status: 'idle' | 'loading' | 'done', ai, error } - the overall fit (quick from the profile, or AI).
-  let matchState = { key: '' };
+  // ---------- JobBid Fit Estimate (ats.js in the background: AI reads the job and reviews the evidence, rules score it) ----------
+  // atsState: the score for this job, resume and evidence choice. atsMade: the optimizer's last file for this job
+  // (kept only in this page, until it is used for the application).
   const matchKeyOf = (job, p) => job.url.split('#')[0] + '|' + job.title + '|' + p.id;
-  function runMatchAI(job, p, force) {
-    const key = matchKeyOf(job, p);
-    const prev = matchState.key === key ? matchState.ai : null;
-    matchState = { key, status: 'loading', ai: prev };
-    render();
-    api.send({ type: 'analyzeMatch', profile: p, job: { title: job.title, company: job.company, url: job.url, description: job.description }, force }).then((r) => {
-      if (matchState.key !== key) return;
-      matchState = r.ok ? { key, status: 'done', ai: r.match } : { key, status: 'done', error: r.error || 'AI failed', ai: prev };
-      render();
-    });
-  }
-
-  // ---------- Estimated ATS match (ats.js in the background reads the resume file itself) ----------
-  // atsState: the score of the profile's resume file for this job. atsMade: the optimizer's last file for this
-  // job (kept only in this page, until it is used for the application).
   let atsState = { key: '', status: 'idle' };
   let atsMade = { key: '', file: null, before: null, after: null, used: '' };
   let atsPick = ''; // resume chosen in the Match tab
+  const SOURCES = { resume: 'Resume file', profile: 'Profile', both: 'Resume + profile' };
+  const atsSource = () => (SOURCES[data.atsSource] ? data.atsSource : 'resume');
   const atsResumeId = (p) => {
     const list = p.resumes || [];
     const id = atsPick || pickedResume || api.chooseResume(p)?.id || '';
     return list.some((r) => r.id === id) ? id : list[0]?.id || '';
   };
-  const atsKeyOf = (job, p) => matchKeyOf(job, p) + '|' + atsResumeId(p);
+  const atsKeyOf = (job, p) => matchKeyOf(job, p) + '|' + atsResumeId(p) + '|' + atsSource();
   const atsJob = (job) => ({ title: job.title, company: job.company, url: job.url, description: job.description });
-  // A score made before (the job already read by the AI) shows again without asking the AI.
+  // A score made before (the same job, evidence and AI judgments) shows again without asking the AI.
   function atsLoad(job, p) {
     const key = atsKeyOf(job, p);
     if (atsState.key === key) return;
     atsState = { key, status: 'idle' };
-    if (!atsResumeId(p)) return;
-    api.send({ type: 'atsScore', cachedOnly: true, profile: p, resumeId: atsResumeId(p), job: atsJob(job) }).then((r) => {
+    if (atsSource() !== 'profile' && !atsResumeId(p)) return;
+    api.send({ type: 'atsScore', cachedOnly: true, profile: p, resumeId: atsResumeId(p), job: atsJob(job), source: atsSource() }).then((r) => {
       if (atsState.key !== key || atsState.status !== 'idle') return;
       if (r.ok && r.result) { atsState = { key, status: 'done', res: r.result }; if (data.panelTab === 'match') render(); }
     });
@@ -952,12 +767,13 @@
     const key = atsKeyOf(job, p);
     atsState = { key, status: 'loading', res: atsState.key === key ? atsState.res : null, t0: Date.now() };
     render();
-    api.send({ type: 'atsScore', force, profile: p, resumeId: atsResumeId(p), job: atsJob(job) }).then((r) => {
+    api.send({ type: 'atsScore', force, profile: p, resumeId: atsResumeId(p), job: atsJob(job), source: atsSource() }).then((r) => {
       if (atsState.key !== key) return;
       atsState = r.ok && r.result ? { key, status: 'done', res: r.result } : { key, status: 'error', error: r.error || 'Failed', res: atsState.res };
-      const title = r.ok && r.result ? `Resume scored: ${r.result.report.score}/100` : 'Scoring failed';
-      const msg = r.ok && r.result ? `${r.result.report.counts.matched} matched, ${r.result.report.counts.partial} partly, ${r.result.report.counts.missing} missing · ${r.result.resume.name}` : r.error || '';
-      api.toast({ kind: r.ok && r.result ? 'ok' : 'err', title, msg, ms: 6000 });
+      const rep = r.ok && r.result?.report;
+      const title = rep ? `JobBid Fit Estimate: ${rep.score}/100` : 'The fit estimate failed';
+      const msg = rep ? `${rep.band} · ${rep.mode === 'ai' ? 'AI-reviewed' : 'rules only'} · ${SOURCES[r.result.source]}` : r.error || '';
+      api.toast({ kind: rep ? 'ok' : 'err', title, msg, ms: 6000 });
       if (document.hidden) api.send({ type: 'atsNotify', title, msg });
       render();
     });
@@ -968,13 +784,13 @@
     const slot = allItems().find((x) => x.name === 'Resume/CV');
     if (slot) {
       const n = await uploadFixed(slot, file);
-      if (n) { atsMade.used = 'uploaded'; setTimeout(schedule, 600); render(); return `${file.name} (score ${file.score}) is in this form's resume box. Only for this application.`; }
+      if (n) { atsMade.used = 'uploaded'; setTimeout(schedule, 600); render(); return `${file.name} (fit ${file.score}) is in this form's resume box. Only for this application.`; }
       return 'The site would not take the upload. Download it and use the site\'s own upload button.';
     }
     await api.send({ type: 'holdFixedResume', file, profileId: p.id });
     atsMade.used = 'held';
     render();
-    return `${file.name} (score ${file.score}) goes into the application form's resume box when you open it and press Fill. Only for this application.`;
+    return `${file.name} (fit ${file.score}) goes into the application form's resume box when you open it and press Fill. Only for this application.`;
   }
   async function uploadFixed(slot, file) {
     if (slot.frame) { frameWindows[slot.frame - 1]?.postMessage({ __jobbid: 'attach', fixed: file }, '*'); return 1; }
@@ -985,9 +801,10 @@
     const opt = window.__jobbidOptimizer;
     if (!opt) return api.toast({ kind: 'warn', title: 'Reload the page', msg: 'The optimizer was added after this page opened.', ms: 6000 });
     if (atsState.status !== 'done') return;
+    if (step !== 'score' && atsSource() === 'profile') return api.toast({ kind: 'warn', title: 'Choose the resume as evidence', msg: 'The optimizer changes the resume file: choose "Resume file" or "Resume + profile" first.', ms: 7000 });
     const key = atsState.key;
     opt.open({
-      api, profile: p, job: atsJob(job), resumeId: atsResumeId(p), result: atsState.res, step, theme: data.settings.theme, useFile: useOptimized,
+      api, profile: p, job: atsJob(job), resumeId: atsResumeId(p), source: atsSource(), result: atsState.res, step, theme: data.settings.theme, useFile: useOptimized,
       onScored: (res) => { if (atsState.key === key) { atsState = { key, status: 'done', res }; render(); } },
       onBuilt: (b) => { atsMade = { key, file: b.file, before: b.history[0], after: b.after.score, used: '' }; render(); },
     });
@@ -1002,48 +819,110 @@
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
-  function atsCard(p, job) {
+  // ---------- The Match tab ----------
+
+  const fitColor = (v) => (v >= 75 ? 'var(--ok)' : v >= 55 ? 'var(--warn)' : 'var(--err)');
+  const MSHORT = { direct: 'Direct', equivalent: 'Equivalent', related: 'Related', none: 'Not shown', contradiction: 'Conflict' };
+  const IMP_ORDER = { required: 0, preferred: 1, optional: 2 };
+  // One requirement: status, the evidence quoted from the resume / profile, why, and what to do.
+  const reqItem = (x) => {
+    const e = x.evidence[0];
+    return `<div class="rqi"><div class="rqh"><span class="mchip m-${x.match}" title="${esc(x.matchLabel)}">${MSHORT[x.match]}</span><b translate="no">${esc(x.term)}</b>
+        <span class="t3">${esc(x.kind)}${x.hard ? ' · must-have' : ''}</span></div>
+      ${e ? `<div class="ev">"${esc(x.quote || e.text)}" <i>${esc(e.source === 'profile' ? 'profile' : 'resume')} · ${esc(e.section)}${x.via ? ` · as "${esc(x.via)}"` : ''}</i></div>` : ''}
+      ${x.explanation ? `<div class="ex">${esc(x.explanation)}</div>` : ''}
+      ${x.recommendation ? `<div class="rec">${svg('arrow')}<span>${esc(x.recommendation)}</span></div>` : ''}
+      ${x.note && !(x.status === 'matched' && /exact words|found by its exact/.test(x.note)) ? `<div class="t3 chk">Checked: ${esc(x.note)}</div>` : ''}</div>`;
+  };
+  // A list of requirements, gaps first and the most important first.
+  const reqGroup = (list) => {
+    const by = (m) => list.filter((x) => m.includes(x.match)).sort((a, b) => IMP_ORDER[a.importance] - IMP_ORDER[b.importance] || b.weight - a.weight);
+    const part = (title, xs) => (xs.length ? `<div class="rqg">${title} (${xs.length})</div>${xs.map(reqItem).join('')}` : '');
+    return part('Not demonstrated', by(['none', 'contradiction'])) + part('Related experience only', by(['related'])) + part('Shown', by(['direct', 'equivalent']));
+  };
+  const stat = (credit) => (credit == null ? ['na', 'n/a'] : credit >= 0.85 ? ['ok', 'Meets'] : credit >= 0.5 ? ['warn', 'Partly'] : ['err', 'Gap']);
+  // One row of "Resume vs job": what the job asks, what the evidence shows, status; opens to the details.
+  const cmpRow = (label, needs, shows, credit, body, open = false) => {
+    const [cls, word] = stat(credit);
+    return `<details class="cmp"${open ? ' open' : ''}><summary><span class="cl">${label}</span><span class="cj" translate="no">${needs}</span><span class="cr" translate="no">${shows}</span><span class="st ${cls}">${word}</span></summary>${body ? `<div class="cb">${body}</div>` : ''}</details>`;
+  };
+
+  function fitView(p, job) {
     atsLoad(job, p);
     const list = p.resumes || [];
-    const pick = list.length > 1 ? `<select id="atsResume" class="mini" title="Resume file to score">${list.map((r) => `<option value="${esc(r.id)}" ${r.id === atsResumeId(p) ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>` : '';
-    if (!list.length) return `<div class="card"><b>Estimated ATS match</b><div class="t2" style="margin-top:4px">Add a resume file (PDF or Word) to ${esc(pname(p))} in the dashboard to score it against this job.</div></div>`;
+    const src = atsSource();
+    const controls = `<div class="fitctl"><label>Evidence <select id="atsSrc" class="mini">${Object.entries(SOURCES).map(([k, v]) => `<option value="${k}" ${k === src ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      ${src !== 'profile' && list.length > 1 ? `<label>File <select id="atsResume" class="mini">${list.map((r) => `<option value="${esc(r.id)}" ${r.id === atsResumeId(p) ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>` : ''}</div>`;
     const s = atsState;
     const st = data.aiStatus || {};
+    const head = (inner) => `<div class="card"><b>JobBid Fit Estimate</b>${controls}${inner}</div>`;
+    if (src !== 'profile' && !list.length) return head(`<div class="t2" style="margin-top:6px">${esc(pname(p))} has no resume file. Add a PDF or Word resume in the dashboard, or choose "Profile" as the evidence.</div>`);
     if (s.status === 'loading') {
-      // The background's steps for this run, ticking off as they finish.
       const pr = data.atsProgress;
       const mine = pr && pr.op === 'score' && new Date(pr.startedAt).getTime() >= (s.t0 || 0) - 1500 ? pr : null;
       const steps = mine ? `<ol class="atsteps">${mine.steps.map((x) => `<li class="${x.state}"><span class="d">${{ done: '✓', skip: '✓', fail: '✕' }[x.state] || ''}</span><span class="grow"><b>${esc(x.label)}</b>
           <span class="t3">${esc(x.state === 'now' && st.state === 'working' && /^(Asking|Waiting|Retry)/i.test(st.stage || '') ? st.stage : x.detail)}</span></span></li>`).join('')}</ol>` : '<div class="thinking"><span class="spin"></span>Starting...</div>';
-      return `<div class="card"><b>Estimated ATS match</b><div style="margin-top:6px">${steps}</div></div>`;
+      return head(`<div style="margin-top:8px">${steps}</div>`);
     }
     if (s.status !== 'done') {
-      return `<div class="card"><div class="ats"><div class="grow"><b>Estimated ATS match</b>
-          <div class="t2">Checks your resume file against this job's requirements: keywords, skills shown in experience, title, years, education and layout. The AI reads the job once; the scoring itself is the same every time.</div></div></div>
+      return head(`<div class="t2" style="margin-top:6px">How well the ${src === 'profile' ? 'profile' : src === 'both' ? 'resume and profile' : 'resume file'} fits this job's own requirements, with the evidence for each one.
+        The AI reads the job and reviews the evidence; JobBid checks every judgment against your text and adds up the score with fixed, visible weights.</div>
         ${s.status === 'error' ? `<div class="bar-info err" style="margin-top:8px">${svg('alert')}<span class="grow">${esc(s.error)}</span></div>` : ''}
-        <div class="acts" style="margin-top:8px">${pick}${aiDown() ? '<span class="t2">Needs a working AI key to read the job.</span>' : `<button id="atsRun">${svg('target')}${s.status === 'error' ? 'Try again' : 'Score my resume'}</button>`}</div></div>`;
+        <div class="acts" style="margin-top:8px"><button id="atsRun">${svg('target')}${s.status === 'error' ? 'Try again' : 'Analyze the fit'}</button></div>
+        ${aiDown() ? '<div class="t3" style="margin-top:6px">No working AI key: the result will be rules only (exact words), and it will say so.</div>' : ''}`);
     }
-    const r = s.res.report;
+    const res = s.res, r = res.report;
+    const comp = (k) => r.components.find((x) => x.key === k);
     const made = atsMade.key === s.key && atsMade.file;
-    const miss = r.requirements.filter((x) => x.status === 'missing' && x.category !== 'responsibility');
-    const part = r.requirements.filter((x) => x.status === 'partial' && x.category !== 'responsibility');
-    const listed = r.requirements.filter((x) => x.status === 'matched' && !x.demonstrated && x.category !== 'responsibility' && x.category !== 'soft');
-    const c = (v) => (v >= 75 ? 'var(--ok)' : v >= 55 ? 'var(--warn)' : 'var(--err)');
-    const chip = (x, cls) => `<span class="chip ${cls}" title="${esc(x.importance)}${x.via ? ' · related: ' + esc(x.via) : ''}">${esc(x.term)}</span>`;
-    return `<div class="card">
-        <div class="ats"><div class="grow"><b>Estimated ATS match</b><div class="t2 ellip" translate="no">${esc(s.res.resume.name)} · an estimate, not the employer's score</div></div>
-          <div class="num" style="color:${c(r.score)}">${Math.round(r.score)}<small>/100</small></div></div>
-        ${made ? `<div class="bar-info" style="margin-top:8px">${svg('check')}<span class="grow">Optimized version: <b>${Math.round(atsMade.after)}</b> (was ${Math.round(atsMade.before)})${atsMade.used === 'uploaded' ? ' · uploaded' : atsMade.used === 'held' ? ' · waiting for the form' : ''}</span>
+    const rq = (f) => r.requirements.filter(f);
+    const shownN = (xs) => xs.filter((x) => x.status === 'matched').length;
+    const reqSkills = rq((x) => (x.category === 'skill' || x.category === 'tool') && x.importance === 'required');
+    const prefSkills = rq((x) => ((x.category === 'skill' || x.category === 'tool') && x.importance !== 'required') || x.category === 'soft');
+    const resp = rq((x) => x.category === 'responsibility'), inds = rq((x) => x.category === 'domain'), certs = rq((x) => x.category === 'certification' || x.category === 'qualification');
+    const modeNote = r.mode === 'ai' ? '<span class="badge ok">AI-reviewed</span>' : `<span class="badge warn" title="${esc(res.notes?.reviewReason || res.notes?.jobReason || '')}">Rules only</span>`;
+    const lv = (n) => ['intern', 'junior', 'mid-level', 'senior', 'staff / lead', 'principal'][n] || '';
+    const yrsShow = r.years.have == null ? 'no dates or stated years' : `${r.years.have} yrs (${r.years.from})`;
+    const unmet = r.eligibility.filter((x) => !x.met);
+    const sum = r.summaryReview;
+    const sugg = r.suggestions.length ? r.suggestions : [];
+    const recs = rq((x) => x.recommendation && x.status !== 'matched').concat(rq((x) => x.recommendation && x.status === 'matched')).slice(0, 5);
+    const readyBad = r.readability.checks.filter((c) => !c.ok);
+    return `
+      <div class="card fit">
+        <div class="fithead"><div class="grow"><b>JobBid Fit Estimate</b><div class="band" style="color:${fitColor(r.score)}">${esc(r.band)}</div>
+            <div class="t3">${modeNote} · ${esc(SOURCES[res.source])}${res.source !== 'profile' ? ` · <span translate="no">${esc(res.resume.name)}</span>` : ''}</div></div>
+          <div class="fitnum" style="color:${fitColor(r.score)}">${Math.round(r.score)}<small>/100</small></div></div>
+        ${controls}
+        ${r.mode !== 'ai' ? `<div class="bar-info warn" style="margin-top:8px">${svg('warn')}<span class="grow">Rules only: exact words were matched, no AI judgment${res.notes?.reviewReason || res.notes?.jobReason ? ` (${esc((res.notes.reviewReason || res.notes.jobReason).slice(0, 120))})` : ''}.</span></div>` : ''}
+        ${unmet.length ? `<div class="bar-info err" style="margin-top:8px">${svg('alert')}<span class="grow">May not meet a must-have: ${unmet.map((x) => esc(x.term)).join(', ')}</span></div>` : ''}
+        ${res.diff ? `<details class="diff"><summary>${res.diff.delta > 0 ? '+' : ''}${res.diff.delta} since the last score (${res.diff.from} → ${res.diff.to}) - why</summary><ul class="mlist">${res.diff.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}
+        ${made ? `<div class="bar-info" style="margin-top:8px">${svg('check')}<span class="grow">Optimized resume: <b>${Math.round(atsMade.after)}</b> (was ${Math.round(atsMade.before)})${atsMade.used === 'uploaded' ? ' · uploaded' : atsMade.used === 'held' ? ' · waiting for the form' : ''}</span>
           <button class="link" id="atsUse">Use</button><button class="link" id="atsDown">Download</button></div>` : ''}
-        <div class="mbars">${r.components.map((x) => { const pct = x.max ? Math.round((x.points / x.max) * 100) : 0; return `<div class="mbar"><span>${esc(x.label)}</span><b style="color:${c(pct)}">${Math.round(x.points * 10) / 10}/${Math.round(x.max)}</b><span class="tr"><i style="width:${pct}%;background:${c(pct)}"></i></span></div>`; }).join('')}</div>
-        <div class="grp" style="margin-top:12px">Requirements: ${r.counts.matched} matched · ${r.counts.partial} partly · ${r.counts.missing} missing</div>
-        ${miss.length ? `<div class="chips" translate="no">${miss.slice(0, 10).map((x) => chip(x, 'miss')).join('')}${miss.length > 10 ? `<span class="chip miss">+${miss.length - 10}</span>` : ''}</div>` : ''}
-        ${part.length ? `<div class="chips" translate="no" style="margin-top:4px">${part.slice(0, 8).map((x) => chip(x, 'close')).join('')}</div>` : ''}
-        ${listed.length ? `<div class="t2" style="margin-top:6px;font-size:11.5px">Listed but not shown in work experience: ${listed.slice(0, 6).map((x) => esc(x.term)).join(', ')}</div>` : ''}
-        ${r.warnings.length ? `<div class="bar-info warn" style="margin-top:8px">${svg('warn')}<span class="grow">${r.warnings.length} formatting warning${r.warnings.length === 1 ? '' : 's'}: ${esc(r.warnings[0])}</span></div>` : ''}
-        <div class="acts" style="margin-top:10px">${pick}<button id="atsDetail" class="ghost">Details</button><button id="atsOpt">${svg('spark')}Optimize resume</button></div>
-        <div class="row" style="display:flex;align-items:center;gap:8px;color:var(--t3);font-size:11px;margin-top:6px">Job read by AI · resume scored by rules<span style="flex:1"></span><button class="link" id="atsRescore">Re-score</button></div>
-      </div>`;
+        <div class="mbars">${r.components.map((x) => { const pct = x.max ? Math.round((x.points / x.max) * 100) : 0; return `<div class="mbar" title="${esc(x.detail)}"><span>${esc(x.label)}</span><b style="color:${fitColor(pct)}">${Math.round(x.points * 10) / 10}/${Math.round(x.max * 10) / 10}</b><span class="tr"><i style="width:${pct}%;background:${fitColor(pct)}"></i></span></div>`; }).join('')}</div>
+        <div class="t3" style="margin-top:6px">Weights are JobBid's defaults, not an employer's. An estimate, not the employer's ATS score.</div>
+      </div>
+      <div class="card"><b>Resume vs job</b><div class="t3">Tap a row for the evidence.</div>
+        <div class="cmphd"><span class="cl"></span><span class="cj">Job requires</span><span class="cr">${res.source === 'profile' ? 'Profile' : 'Resume'} shows</span><span class="st"></span></div>
+        ${r.title ? cmpRow('Job title', esc(r.title.job), esc(r.title.line || '-'), comp('title')?.credit, `<div class="ex">Title words in common: ${r.title.pct}%${r.title.jobLevel != null ? ` · job level: ${lv(r.title.jobLevel)}` : ''}${r.title.myLevel != null ? ` · yours: ${lv(r.title.myLevel)}` : ''}.</div>${comp('title')?.deductions.map((d) => `<div class="t3">-${d.points}: ${esc(d.text)}</div>`).join('') || ''}`) : ''}
+        ${r.years.need ? cmpRow('Years', `${r.years.need}+ yrs`, esc(yrsShow), r.years.have == null ? 0.5 : Math.min(1, r.years.have / r.years.need), `${r.years.note ? `<div class="bar-info warn">${svg('warn')}<span class="grow">${esc(r.years.note)}</span></div>` : '<div class="ex">One source, no disagreement.</div>'}
+          <div class="t3">Resume: ${r.years.resume?.dates ?? '-'} yrs from dates, ${r.years.resume?.stated ?? '-'} stated · Profile: ${r.years.profile?.dates ?? '-'} from dates, ${r.years.profile?.stated ?? '-'} stated. Nothing is inferred beyond these.</div>`, false) : ''}
+        ${inds.length ? cmpRow('Industry', esc(inds.map((x) => x.term).join(', ')), esc(inds.filter((x) => x.status === 'matched').map((x) => x.term).join(', ') || 'none shown'), comp('industry')?.credit, reqGroup(inds)) : ''}
+        ${reqSkills.length ? cmpRow('Required skills', `${reqSkills.length}`, `${shownN(reqSkills)} shown`, comp('required')?.credit, reqGroup(reqSkills), true) : ''}
+        ${prefSkills.length ? cmpRow('Preferred skills', `${prefSkills.length}`, `${shownN(prefSkills)} shown`, comp('preferred')?.credit, reqGroup(prefSkills)) : ''}
+        ${resp.length ? cmpRow('Responsibilities', `${resp.length}`, `${shownN(resp)} shown`, comp('responsibilities')?.credit, reqGroup(resp)) : ''}
+        ${r.degree ? cmpRow('Education', esc(`${r.degree.need}'s${r.degree.fields.length ? ' in ' + r.degree.fields.slice(0, 2).join(' / ') : ''}${r.degree.required ? '' : ' (preferred)'}`), esc(r.degree.line || 'no degree found'), comp('education')?.credit, comp('education')?.deductions.map((d) => `<div class="t3">-${d.points}: ${esc(d.text)}</div>`).join('') || '<div class="ex">Meets the education requirement.</div>') : ''}
+        ${certs.length ? cmpRow('Certifications', `${certs.length}`, `${shownN(certs)} shown`, certs.length ? certs.reduce((s2, x) => s2 + ({ direct: 1, equivalent: 0.9, related: 0.35 }[x.match] || 0), 0) / certs.length : null, reqGroup(certs)) : ''}
+        ${sum ? cmpRow('Summary', 'fits the role', esc(sum.status), { strong: 1, adequate: 0.7, weak: 0.4, missing: 0 }[sum.status], `${sum.explanation ? `<div class="ex">${esc(sum.explanation)}</div>` : ''}${sum.recommendation ? `<div class="rec">${svg('arrow')}<span>${esc(sum.recommendation)}</span></div>` : ''}<div class="t3">Shown for guidance; not part of the score.</div>`) : ''}
+      </div>
+      ${sugg.length || recs.length ? `<div class="card"><b>How to improve</b><div class="t3">Based only on what your ${res.source === 'profile' ? 'profile' : 'resume'} already shows. Nothing here asks you to claim new skills.</div>
+        <ul class="mlist">${sugg.map((g) => `<li>${esc(g.text)}${g.evidence[0] ? `<div class="t3">From: "${esc(g.evidence[0].slice(0, 110))}"</div>` : ''}</li>`).join('')}
+        ${recs.filter((x) => !sugg.some((g) => g.text === x.recommendation)).slice(0, Math.max(0, 5 - sugg.length)).map((x) => `<li><b translate="no">${esc(x.term)}</b>: ${esc(x.recommendation)}</li>`).join('')}</ul></div>`
+    : r.mode !== 'ai' ? `<div class="card"><b>How to improve</b><ul class="mlist">${r.components.flatMap((x) => x.deductions).sort((a2, b2) => b2.points - a2.points).slice(0, 4).map((d) => `<li>${esc(d.text)}</li>`).join('')}</ul><div class="t3">With the AI, these become suggestions built on your own lines.</div></div>` : ''}
+      <div class="card"><details class="rd"><summary><b>Resume readability</b> <span class="badge ${readyBad.some((c) => c.level === 'risk') ? 'err' : readyBad.length ? 'warn' : 'ok'}">${esc(r.readability.level)}</span></summary>
+        <div class="t3" style="margin:4px 0">How easily applicant-tracking software can read the file. Not part of the fit score.</div>
+        ${r.readability.checks.map((c) => `<div class="rdc ${c.level}"><b>${c.ok ? '✓' : c.level === 'risk' ? '✕' : '!'} ${esc(c.title)}</b><div class="t3">${esc(c.detail)}</div>${!c.ok && c.advice ? `<div class="rec">${svg('arrow')}<span>${esc(c.advice)}</span></div>` : ''}</div>`).join('') || '<div class="t3">Nothing to check.</div>'}</details></div>
+      <div class="acts"><button id="atsDetail" class="ghost">Details</button><button id="atsOpt">${svg('spark')}Optimize resume</button></div>
+      <div class="row" style="display:flex;align-items:center;gap:8px;color:var(--t3);font-size:11px;margin-top:6px">Same job + evidence = same score<span style="flex:1"></span><button class="link" id="atsRescore">Re-analyze</button></div>`;
   }
 
   function matchTab(p) {
@@ -1051,61 +930,7 @@
     if (!job.description || job.description.length < 200) {
       return `<div class="card empty-note">Open a job posting to see how well ${esc(pname(p))} fits it.</div>`;
     }
-    const key = matchKeyOf(job, p);
-    if (matchState.key !== key) {
-      // An earlier AI score for this job and profile shows again without asking the AI.
-      matchState = { key, status: 'idle' };
-      api.send({ type: 'analyzeMatch', cachedOnly: true, profile: p, job: { title: job.title, company: job.company, url: job.url, description: '' } }).then((r) => {
-        if (matchState.key === key && r.ok && r.match && !matchState.ai) { matchState = { key, status: 'done', ai: r.match }; if (data.panelTab === 'match') render(); }
-      });
-    }
-    const quick = matchAnalysis(job, p);
-    const ai = matchState.ai;
-    const aiNums = ai ? Object.fromEntries(['overall', 'experience', 'skills', 'industry', 'title'].map((k) => [k, ai[k]]).filter(([, v]) => typeof v === 'number')) : {};
-    const allZero = Object.keys(aiNums).length >= 4 && Object.values(aiNums).every((v) => v === 0);
-    const m = ai ? { ...quick, ...(allZero ? {} : aiNums) } : { ...quick };
-    // With the resume scored, the Skills bar is its weighted keyword coverage (the job's own requirements).
-    const rep = atsState.key === atsKeyOf(job, p) && atsState.res ? atsState.res.report : null;
-    const kwc = rep?.components.find((x) => x.key === 'keywords');
-    if (kwc && !ai) m.skills = Math.round((kwc.points / kwc.max) * 100);
-    const loading = matchState.status === 'loading';
-    const color = (v) => (v >= 75 ? 'var(--ok)' : v >= 55 ? 'var(--warn)' : 'var(--err)');
-    const verdict = m.overall >= 80 ? 'Strong match' : m.overall >= 65 ? 'Good match' : m.overall >= 50 ? 'Fair match' : 'Low match';
-    const r = 30, circ = 2 * Math.PI * r;
-    const bar = (label, v, note) => `<div class="mbar"><span>${label}</span><b style="color:${color(v)}">${v}%</b>
-      <span class="tr"><i style="width:${v}%;background:${color(v)}"></i></span>${note ? `<span class="note" translate="no">${esc(note)}</span>` : ''}</div>`;
-    const expNote = quick.need != null && quick.yrs != null ? `Job asks ~${quick.need}+ yrs · profile has ${quick.yrs}` : quick.yrs != null ? `Profile has ${quick.yrs} yrs` : '';
-    const indNote = (ai?.industries?.length ? ai.industries : quick.jobInd).join(', ');
-    const skillNote = kwc && !ai ? `${rep.counts.matched} of ${rep.counts.total} job requirements in the resume` : '';
-    const li = (arr) => `<ul class="mlist">${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
-    // How to improve: the score's biggest deductions once the resume is scored.
-    const tips = ai?.tips?.length ? ai.tips : rep ? rep.components.flatMap((x) => x.deductions.map((d) => ({ ...d }))).sort((a, b) => b.points - a.points).slice(0, 4).map((d) => `${d.text} (-${d.points})`)
-      : quick.tips.filter((t) => !/^Add these words/.test(t));
-    return `
-      <div class="cap">Match for ${esc(pname(p))}</div>
-      <div class="card">
-        <div class="mhead">
-          <div class="ring"><svg viewBox="0 0 72 72"><circle cx="36" cy="36" r="${r}" fill="none" stroke="var(--bg)" stroke-width="7"/>
-            <circle cx="36" cy="36" r="${r}" fill="none" stroke="${color(m.overall)}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${(m.overall / 100) * circ} ${circ}"/></svg>${m.overall}%</div>
-          <div class="grow"><div class="mverdict" style="color:${color(m.overall)}">${verdict}</div>
-            <div class="t2 ellip" translate="no">${esc(job.title)}${job.company ? ' · ' + esc(job.company) : ''}</div>
-            ${ai?.verdict ? `<div class="t2" style="margin-top:4px">${esc(ai.verdict)}</div>` : ''}</div>
-        </div>
-        <div class="mbars">
-          ${bar('Experience level', m.experience, expNote)}
-          ${bar('Skills', m.skills, skillNote)}
-          ${bar('Industry experience', m.industry, indNote ? `Job: ${indNote}` : 'No specific industry in the posting')}
-          ${bar('Job title', m.title, quick.myTitle ? `Yours: ${quick.myTitle}` : '')}
-        </div>
-        ${loading ? `<div class="thinking"><span class="spin"></span>AI is scoring the fit...</div>`
-    : `<div class="row" style="display:flex;align-items:center;gap:8px;color:var(--t3);font-size:11px;margin-top:8px">${matchState.error ? `AI failed: ${esc(matchState.error)}` : ai ? 'Fit scored by AI from the profile' : 'Quick fit from the profile'}
-            <span style="flex:1"></span>${aiDown() ? '' : `<button class="link" id="matchAI">${ai ? 'Re-score' : 'Score with AI'}</button>`}</div>`}
-      </div>
-      ${atsCard(p, job)}
-      ${ai?.strengths?.length ? `<div class="card"><b>Strengths</b>${li(ai.strengths)}</div>` : ''}
-      ${(ai?.gaps?.length || 0) + tips.length ? `<div class="card">
-          ${ai?.gaps?.length ? `<b>Gaps</b>${li(ai.gaps)}` : ''}
-          <b style="display:block;${ai?.gaps?.length ? 'margin-top:8px' : ''}">How to improve</b>${li(tips)}</div>` : ''}`;
+    return `<div class="cap">Fit for ${esc(pname(p))} · <span translate="no">${esc(job.title)}</span></div>${fitView(p, job)}`;
   }
 
   // Apply tab: the optimizer's file for this job, ready to use; else a way to make one.
@@ -1467,7 +1292,7 @@
     $('fixAi')?.addEventListener('click', () => openPage('#ai'));
     $('ipline')?.addEventListener('click', () => api.send({ type: 'getIp', force: true }));
     $('reanalyze')?.addEventListener('click', () => { ensureJobAnalysis(api.getJob(), true); render(); });
-    $('matchAI')?.addEventListener('click', () => runMatchAI(api.getJob(), p, true));
+    $('atsSrc')?.addEventListener('change', (e) => { data.atsSource = e.target.value; store.set({ atsSource: e.target.value }); render(); });
     $('atsRun')?.addEventListener('click', () => runAts(false));
     $('atsRescore')?.addEventListener('click', () => runAts(true));
     $('atsOpt')?.addEventListener('click', () => openOptimizer('choose'));

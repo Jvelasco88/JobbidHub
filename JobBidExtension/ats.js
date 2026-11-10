@@ -547,9 +547,15 @@ ${lines}`;
     const byId = {};
     for (const r of analysis.requirements) {
       const x = given.get(r.id) || given.get(r.term);
+      // Not judged by the AI: its exact words decide (rules), and it says so.
+      if (!x) {
+        const m = matchRequirement(r, model.lines);
+        const lm = m.status === 'matched' ? (m.via ? 'equivalent' : 'direct') : m.status === 'partial' ? 'related' : 'none';
+        byId[r.id] = { match: lm, lines: m.evidence.map((e) => e.lineId), quote: '', explanation: '', recommendation: '', note: 'not judged by the AI: exact words only', judged: false };
+        continue;
+      }
       let match = MATCHES.includes(String(x?.status || '').toLowerCase()) ? String(x.status).toLowerCase() : 'none';
       const notes = [];
-      if (!x) notes.push('the AI did not judge this requirement');
       const ids = (Array.isArray(x?.lines) ? x.lines : x?.line != null ? [x.line] : []).map(Number).filter((id) => byLine.has(id) && byLine.get(id).kind !== 'heading');
       const q = clean(x?.quote || '');
       const fq = flat(q);
@@ -563,7 +569,7 @@ ${lines}`;
       // A tool the job reading itself called related (TensorFlow for PyTorch) is never an equivalent.
       const rel = !own && r.related.find((t) => lines.some((l) => phraseAt(l.stems, stems(t)) >= 0));
       if ((match === 'equivalent' || match === 'direct') && rel) { match = 'related'; notes.push(`"${rel}" is a related skill, not the same one`); }
-      byId[r.id] = { match, lines: lines.map((l) => l.id), quote: quoteLine ? q : '', explanation: okText(x?.explanation), recommendation: match === 'none' ? '' : okText(x?.recommendation), note: notes.join('; ') };
+      byId[r.id] = { judged: true, match, lines: lines.map((l) => l.id), quote: quoteLine ? q : '', explanation: okText(x?.explanation), recommendation: match === 'none' ? '' : okText(x?.recommendation), note: notes.join('; ') };
     }
     const s = out?.summary && typeof out.summary === 'object' ? out.summary : null;
     const summary = s ? { status: ['strong', 'adequate', 'weak', 'missing'].includes(String(s.status).toLowerCase()) ? String(s.status).toLowerCase() : 'adequate', explanation: okText(s.explanation), recommendation: okText(s.recommendation) } : null;

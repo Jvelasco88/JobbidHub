@@ -909,11 +909,12 @@ async function atsEvidence({ profile, resumeId, file, source }, prog, steps = [1
   return { src, doc, resumeModel, profileModel, ev, years: JobBidATS.yearsInfo(ev), source };
 }
 
+const atsReviewKey = (analysis, ev) => 'r' + JobBidATS.hash([JobBidATS.VERSION, analysis.at, analysis.requirements.map((r) => r.id + ':' + r.term).join('|'), ev.source, ev.fullText].join('\n'));
 // The AI's review of the evidence for every requirement, checked against the evidence (cached: the same job and
 // evidence always get the same judgments). Without the AI: rules only, and the result says so.
 async function atsReview(analysis, ev, { force = false, cachedOnly = false, prog = null, step = 3 } = {}) {
   if (analysis.mode === 'rules') { prog?.skip(step, 'rules only: the job was not read by the AI'); return { ...JobBidATS.rulesReview(analysis, ev), reason: analysis.reason || '' }; }
-  const key = 'r' + JobBidATS.hash([JobBidATS.VERSION, analysis.at, analysis.requirements.map((r) => r.id + ':' + r.term).join('|'), ev.source, ev.fullText].join('\n'));
+  const key = atsReviewKey(analysis, ev);
   const { atsReviews = {} } = await chrome.storage.local.get('atsReviews');
   if (!force && atsReviews[key]) { prog?.skip(step, 'already reviewed'); return atsReviews[key]; }
   if (cachedOnly) return null;
@@ -922,14 +923,15 @@ async function atsReview(analysis, ev, { force = false, cachedOnly = false, prog
   try {
     const out = await ai(JobBidATS.reviewPrompt(analysis, ev), { temperature: 0, timeoutMs: 200000, accept: (v) => Array.isArray(v?.results) });
     const review = JobBidATS.validateReview(out, analysis, ev);
-    const judged = Object.values(review.byId).filter((j) => !/did not judge/.test(j.note)).length;
-    if (judged < Math.ceil(analysis.requirements.length / 2)) throw new Error(`the AI judged only ${judged} of ${analysis.requirements.length} requirements`);
-    const fixed = Object.values(review.byId).filter((j) => j.note && !/did not judge/.test(j.note)).length;
+    const judged = Object.values(review.byId).filter((j) => j.judged).length;
+    if (!judged) throw new Error('the AI judged none of the requirements');
+    const fixed = Object.values(review.byId).filter((j) => j.judged && j.note).length;
+    const skipped = analysis.requirements.length - judged;
     atsReviews[key] = { ...review, at: new Date().toISOString() };
     for (const k of Object.keys(atsReviews).sort((x, y) => (atsReviews[y].at || '').localeCompare(atsReviews[x].at || '')).slice(60)) delete atsReviews[k];
     await chrome.storage.local.set({ atsReviews });
     aiStage('Evidence reviewed', { state: 'done' });
-    prog?.done(step, `${judged} judged${fixed ? ` · ${fixed} corrected against the evidence` : ''}`);
+    prog?.done(step, `${judged} judged${fixed ? ` · ${fixed} corrected against the evidence` : ''}${skipped ? ` · ${skipped} not judged (exact words used)` : ''}`);
     return atsReviews[key];
   } catch (e) {
     aiStage(`Rules only: ${e.message}`, { state: 'error' });
@@ -1036,7 +1038,14 @@ async function atsBuild({ profile, resumeId, file, job, changes = [], mode = 'ke
     const evAfter = JobBidATS.combineEvidence(outModel, e.profileModel, source);
     prog.done(2, `${outModel.lines.length} lines, ${outModel.words} words${outDoc.meta.pages ? ` · ${outDoc.meta.pages} page${outDoc.meta.pages === 1 ? '' : 's'}` : ''}`);
     prog.start(3);
-    const after = JobBidATS.score(evAfter, analysis, weights, JobBidATS.carryReview(review, e.ev, evAfter), JobBidATS.yearsInfo(evAfter));
+    const carried = JobBidATS.carryReview(review, e.ev, evAfter);
+    const after = JobBidATS.score(evAfter, analysis, weights, carried, JobBidATS.yearsInfo(evAfter));
+    // Scoring the new file again later uses these same judgments, so it always gets this same score.
+    if (carried?.mode === 'ai') {
+      const { atsReviews = {} } = await chrome.storage.local.get('atsReviews');
+      atsReviews[atsReviewKey(analysis, evAfter)] = { ...carried, at: new Date().toISOString() };
+      await chrome.storage.local.set({ atsReviews });
+    }
     prog.done(3, `${before.score} → ${after.score}`);
     prog.start(4);
     const verify = JobBidATS.verify({ before, after, beforeModel: e.resumeModel, afterModel: outModel, targets, changes: applied });
