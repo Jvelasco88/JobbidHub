@@ -1,5 +1,5 @@
 // JobBid Autofill - background service worker.
-importScripts('datasync.js', 'hubsync.js', 'proxy.js', 'lib/pdf-lib.min.js', 'resumefix.js');
+importScripts('datasync.js', 'hubsync.js', 'proxy.js', 'lib/pdf-lib.min.js', 'resumefix.js', 'resumedoc.js', 'ats.js');
 // Owns storage access, Gemini API calls and the application tracker.
 
 // Gemini and Anthropic (Claude) have their own formats; every other provider speaks the OpenAI
@@ -800,19 +800,110 @@ ${(job.description || '').slice(0, 7000)}`;
   }
 }
 
-// ---------- Fix resume: the original file tailored to one job, same look (resumefix.js); kept in memory only ----------
-async function fixResume({ profile: p, resumeId, job, gaps = [], missing = [] }) {
-  const list = p.resumes || [];
-  const meta = list.find((r) => r.id === resumeId) || list.find((r) => r.id === p.defaultResumeId) || list[0];
-  if (!meta) throw new Error('This profile has no resume file. Add one in the dashboard first.');
+// ---------- ATS matcher and resume optimizer (ats.js, resumedoc.js) ----------
+// The AI reads each job once (cached); the resume file itself is scored without the AI, the same way every time,
+// so the score before and after the optimizer compares. Optimized files live only in the page that asked
+// (and the session hold for its application form), never in the profile.
+
+// The job's requirements, checked against its text. Cached per job text.
+async function atsJobAnalysis(job, { force = false, cachedOnly = false } = {}) {
+  const key = 'j' + JobBidATS.hash(`${job.title || ''}\n${job.description || ''}`);
+  const { atsJobs = {} } = await chrome.storage.local.get('atsJobs');
+  if (!force && atsJobs[key]?.version === JobBidATS.VERSION) return atsJobs[key];
+  if (cachedOnly) return null;
+  if (String(job.description || '').length < 200) throw new Error('Open the job posting first: there is no job description on this page');
+  aiStage('Reading the job\'s requirements...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
+  try {
+    const out = await ai(JobBidATS.analysisPrompt(job), { temperature: 0.1, timeoutMs: 150000, accept: (v) => Array.isArray(v?.requirements) });
+    const a = JobBidATS.validateAnalysis(out, job);
+    if (a.requirements.length < 3) throw new Error(`The AI found only ${a.requirements.length} requirement${a.requirements.length === 1 ? '' : 's'} it could show in the posting. Try again.`);
+    atsJobs[key] = a;
+    for (const k of Object.keys(atsJobs).sort((x, y) => (atsJobs[y].at || '').localeCompare(atsJobs[x].at || '')).slice(40)) delete atsJobs[k];
+    await chrome.storage.local.set({ atsJobs });
+    aiStage(`Job read: ${a.requirements.length} requirements`, { state: 'done' });
+    return a;
+  } catch (e) {
+    aiStage(e.message, { state: 'error' });
+    throw e;
+  }
+}
+
+// The resume to score: an optimized version the page holds, or the profile's file.
+async function atsSource(profile, resumeId, file) {
+  if (file?.data) return { name: file.name, type: file.type, data: file.data, id: file.id || '', optimized: true };
+  const list = profile?.resumes || [];
+  const meta = list.find((r) => r.id === resumeId) || list.find((r) => r.id === profile?.defaultResumeId) || list[0];
+  if (!meta) throw new Error('This profile has no resume file. Add a PDF or Word resume in the dashboard first.');
   const key = 'file_' + meta.id;
   const data = (await chrome.storage.local.get(key))[key];
   if (!data) throw new Error(`${meta.name} is not on this computer yet. Wait for the sync, then try again.`);
-  aiStage(`Fixing ${meta.name} for this job...`, { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
+  return { name: meta.name, type: meta.type, data, id: meta.id, optimized: false };
+}
+const atsWeights = async () => ({ ...JobBidATS.DEFAULT_WEIGHTS, ...((await chrome.storage.local.get('atsWeights')).atsWeights || {}) });
+
+async function atsRead(src, analysis) {
+  const doc = await rdOpen(src);
+  const model = JobBidATS.buildModel(doc.lines, doc.meta);
+  const report = JobBidATS.score(model, analysis, await atsWeights());
+  return { doc, model, report };
+}
+const atsLines = (model) => model.lines.map((l) => ({ id: l.id, text: l.text, zone: l.zone, kind: l.kind, lock: l.lock, bullet: l.bullet }));
+
+async function atsScore({ profile, resumeId, file, job, force, cachedOnly }) {
+  const analysis = await atsJobAnalysis(job, { force, cachedOnly });
+  if (!analysis) return null;
+  const src = await atsSource(profile, resumeId, file);
+  const { doc, model, report } = await atsRead(src, analysis);
+  const sections = ['summary', 'skills', 'experience', 'projects'].filter((z) => model.lines.some((l) => l.zone === z && !l.lock && l.kind !== 'heading'));
+  return { analysis, report, resume: { id: src.id, name: src.name, type: doc.type, kind: doc.kind, optimized: src.optimized }, lines: atsLines(model), sections };
+}
+
+async function atsOptimize({ profile, resumeId, file, job, sections, targets = [], mode }) {
+  const analysis = await atsJobAnalysis(job, {});
+  const src = await atsSource(profile, resumeId, file);
+  const { doc, model, report } = await atsRead(src, analysis);
+  const sel = (sections || []).filter((z) => ['summary', 'skills', 'experience', 'projects'].includes(z));
+  if (!sel.length) throw new Error('Choose at least one section to improve');
+  const fitsOnly = doc.kind === 'pdf' && mode === 'keep';
+  aiStage('Tailoring the resume to the job...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
   try {
-    const out = await fixResumeFile({ data, meta, job, gaps, missing, ask: (prompt) => ai(prompt, { temperature: 0.4, timeoutMs: 300000, accept: (v) => Array.isArray(v?.changes) || Array.isArray(v) }) });
-    aiStage(`Resume fixed: ${out.changed} part${out.changed === 1 ? '' : 's'} rewritten`, { state: 'done' });
-    return out;
+    const out = await ai(JobBidATS.optimizePrompt({ model, analysis, report, sections: sel, targets, job, fitsOnly }), { temperature: 0.35, timeoutMs: 280000, accept: (v) => Array.isArray(v?.changes) });
+    const res = JobBidATS.validateChanges(out, { model, analysis, report, sections: sel, targets, kind: doc.kind, fits: doc.fits });
+    aiStage(`${res.changes.length} change${res.changes.length === 1 ? '' : 's'} proposed`, { state: 'done' });
+    return { ...res, kind: doc.kind };
+  } catch (e) {
+    aiStage(e.message, { state: 'error' });
+    throw e;
+  }
+}
+
+// Writes the accepted changes into the file, reads the new file back and scores it the same way. The bytes
+// returned are exactly the ones scored, and they are what gets downloaded or attached.
+async function atsBuild({ profile, resumeId, file, job, changes = [], mode = 'keep', targets = [], history = [] }) {
+  const analysis = await atsJobAnalysis(job, {});
+  const src = await atsSource(profile, resumeId, file);
+  const base = await atsRead(src, analysis);
+  if (!changes.length) throw new Error('No change accepted');
+  aiStage('Writing the new resume and scoring it again...', { state: 'working', startedAt: new Date().toISOString(), questions: 1 });
+  try {
+    const built = await base.doc.build(changes, base.doc.kind === 'pdf' ? mode : 'keep', base.model);
+    const leftIds = new Set(built.left.map((c) => c.cid));
+    const applied = changes.filter((c) => !leftIds.has(c.cid));
+    if (!applied.length) throw new Error(`None of the changes could be written into this file: ${built.left[0]?.why || ''}`);
+    const outFile = { name: src.name, type: base.doc.type, data: rdB64(built.bytes) };
+    const after = await atsRead(outFile, analysis);
+    const verify = JobBidATS.verify({ before: base.report, after: after.report, beforeModel: base.model, afterModel: after.model, targets, changes: applied });
+    // Scores of every pass so far (the panel sends the earlier ones): the start, then each result.
+    const hist = history.filter((n) => typeof n === 'number');
+    if (hist[hist.length - 1] !== base.report.score) hist.push(base.report.score);
+    hist.push(after.report.score);
+    const next = JobBidATS.nextStep(after.report, hist, targets.map((t) => t.term));
+    aiStage(`New resume scored: ${base.report.score} -> ${after.report.score}`, { state: 'done' });
+    return {
+      file: { ...outFile, changed: applied.length, text: after.model.fullText, score: after.report.score, mode: built.mode, scoredAt: new Date().toISOString() },
+      before: base.report, after: after.report, verify, next, left: built.left, mode: built.mode, rebuilt: built.mode === 'rebuild',
+      compare: JobBidATS.compareRows(base.model, applied), finalLines: atsLines(after.model), history: hist,
+    };
   } catch (e) {
     aiStage(e.message, { state: 'error' });
     throw e;
@@ -826,7 +917,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   let r = await chrome.tabs.sendMessage(tab.id, { type: 'togglePanel' }).catch(() => null);
   if (!r?.ok && /^https?:/.test(tab.url || '')) {
     // Page opened before the extension was (re)loaded: add JobBid to it now.
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['i18n.js', 'content.js', 'panel.js'] }).catch(() => {});
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['i18n.js', 'content.js', 'panel.js', 'optimizer.js'] }).catch(() => {});
     await new Promise((res) => setTimeout(res, 300));
     r = await chrome.tabs.sendMessage(tab.id, { type: 'togglePanel' }).catch(() => null);
   }
@@ -1213,7 +1304,7 @@ async function bidStart(item) {
     const go = () => chrome.tabs.sendMessage(tab.id, { type: 'autoBid', mode: item.mode, bidId: item.id }, { frameId: 0 }).catch(() => null);
     let ok = await go();
     if (!ok?.ok) {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['i18n.js', 'content.js', 'panel.js'] }).catch(() => {});
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['i18n.js', 'content.js', 'panel.js', 'optimizer.js'] }).catch(() => {});
       await new Promise((r) => setTimeout(r, 800));
       ok = await go();
     }
@@ -1399,8 +1490,15 @@ async function handle(msg, sender) {
     }
     case 'coverLetter':
       return { text: await coverLetter(msg) };
-    case 'fixResume':
-      return { file: await fixResume(msg) };
+    case 'atsScore':
+      return { result: await atsScore(msg) };
+    case 'atsOptimize':
+      return { result: await atsOptimize(msg) };
+    case 'atsBuild':
+      return { result: await atsBuild(msg) };
+    case 'atsWeights':
+      if (msg.set || msg.reset) await chrome.storage.local.set({ atsWeights: msg.reset ? {} : msg.set });
+      return { weights: await atsWeights(), defaults: JobBidATS.DEFAULT_WEIGHTS, labels: JobBidATS.WEIGHT_LABELS };
     // A fixed resume made on the job posting waits (session memory only, never synced) for the application
     // form in this tab, or in the tab the job opens, and is dropped once it is in the upload box.
     case 'holdFixedResume': {
@@ -1634,7 +1732,7 @@ async function reinjectOpenTabs() {
   for (const t of tabs) {
     if (t.discarded || t.status === 'unloaded') continue; // Chrome loads these fresh, with JobBid
     const chat = /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//.test(t.url || '');
-    chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: !chat }, files: chat ? ['chatgpt.js'] : ['i18n.js', 'content.js', 'panel.js'] }).catch(() => {});
+    chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: !chat }, files: chat ? ['chatgpt.js'] : ['i18n.js', 'content.js', 'panel.js', 'optimizer.js'] }).catch(() => {});
   }
 }
 

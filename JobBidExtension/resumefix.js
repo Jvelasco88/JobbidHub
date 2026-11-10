@@ -1,81 +1,11 @@
-// Fix resume, keeping the original file's look: only the letters change, never the layout, fonts, sizes,
-// spacing or colours. Word (.docx): the new words go into the original text runs. PDF: the old words are
-// taken out of the page and each new line is drawn at the same spot, with the same font and settings.
+// Resume file helpers: zip (Word .docx) reading and writing, and PDF text reading and in-place rewriting
+// (the old words are taken out of the page and each new line is drawn at the same spot, with the same font and
+// settings). Used by resumedoc.js for the ATS matcher and optimizer.
 
 const rfLatin1 = (bytes) => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return s; };
 const rfBytes = (s) => { const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 255; return b; };
 const rfNum = (v) => String(Math.round(v * 1000) / 1000);
 const BULLET_RE = /^\s*[•●▪■◦‣○►✓*–-]\s+/;
-
-async function fixResumeFile({ data, meta, job, gaps = [], missing = [], ask }) {
-  const bytes = rfBytes(atob(data));
-  const kind = /\.docx$/i.test(meta.name) || /wordprocessingml/.test(meta.type || '') ? 'docx' : /\.pdf$/i.test(meta.name) || /pdf/.test(meta.type || '') ? 'pdf' : '';
-  if (!kind) throw new Error(`${meta.name}: only PDF and Word .docx resumes can be fixed`);
-  const doc = kind === 'pdf' ? await rfPdfOpen(bytes) : await rfDocxOpen(bytes);
-  if (doc.parts.length < 3) throw new Error(`Could not read the text of ${meta.name}${kind === 'pdf' ? ' (a scanned image?)' : ''}`);
-  // A PDF font holds only the letters the file already uses: a keyword it can't spell ("Kubernetes"
-  // without a K) is not asked for, it would only get the whole part thrown away.
-  const canWrite = doc.canWrite || (() => true);
-  const cant = missing.filter((k) => !canWrite(k));
-  const note = [doc.note, cant.length ? `These job keywords cannot be written in this file's font, leave them out: ${cant.join(', ')}` : ''].filter(Boolean).join('\n- ');
-  const toMap = (out) => {
-    const list = Array.isArray(out?.changes) ? out.changes : Array.isArray(out) ? out : out?.id != null && out?.text != null ? [out] : null;
-    return list && new Map(list.filter((c) => c && c.text != null).map((c) => [Number(c.id), String(c.text).replace(/\s+/g, ' ').trim()]));
-  };
-  const changes = toMap(await ask(rfPrompt(doc.parts, job, gaps, missing.filter(canWrite), note)));
-  if (!changes) throw new Error('The AI did not return the resume changes. Try again.');
-  // Every new text is tried against the file first. The ones that don't fit go back to the AI once,
-  // each with the reason, instead of being dropped.
-  const check = doc.check || (() => '');
-  const why = (m) => [...m].map(([id, t]) => ({ id, t, why: check(id, t) })).filter((x) => x.why);
-  let bad = why(changes);
-  for (const x of bad) changes.delete(x.id);
-  if (bad.length) {
-    const again = toMap(await ask(rfRetryPrompt(bad, doc.parts, note)).catch(() => null));
-    const fixed = new Map([...(again || [])].filter(([id, t]) => bad.some((x) => x.id === id) && !check(id, t)));
-    for (const [id, t] of fixed) changes.set(id, t);
-    bad = bad.filter((x) => !fixed.has(x.id));
-  }
-  const res = await doc.apply(changes);
-  res.skipped = (res.skipped || 0) + bad.length;
-  if (!res.changed) {
-    const font = bad.filter((x) => /font has no/.test(x.why)).length;
-    res.why = !bad.length ? 'The AI changed nothing' : font >= bad.length / 2
-      ? `The PDF's font lacks letters the new text needs (${[...new Set(bad.flatMap((x) => (x.why.match(/has no (.*?) -/) || ['', ''])[1].split(' ')))].filter(Boolean).slice(0, 8).join(' ')}). Use the Word version of this resume.`
-      : 'The new text was too long for the original lines';
-  }
-  // Final wording (used to re-score Match for this job). Skipped PDF parts keep the original text.
-  const text = doc.parts.map((p) => (res.used?.has(p.id) ? changes.get(p.id) : p.text)).join('\n');
-  return { name: meta.name, type: meta.type || (kind === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
-    data: btoa(rfLatin1(res.bytes)), changed: res.changed, skipped: res.skipped, why: res.why || '', text };
-}
-
-function rfRetryPrompt(bad, parts, note = '') {
-  const orig = new Map(parts.map((p) => [p.id, p.text]));
-  return `These rewritten resume parts do not fit the file. Fix each one so it fits, keeping its meaning and keywords where possible.${note ? '\n- ' + note : ''}
-Reply with ONLY this JSON: {"changes":[{"id":0,"text":"new text"}]}
-
-${bad.map((x) => `id ${x.id}\nOriginal: ${orig.get(x.id) || ''}\nYour text: ${x.t}\nProblem: ${x.why}`).join('\n\n')}`;
-}
-
-function rfPrompt(parts, job, gaps, missing, note = '') {
-  return `Tailor this resume to the job below so it passes an ATS and impresses a recruiter. The file's layout must not move, so you only rewrite the text of some parts.
-Rules:
-- Each part is "[id|max N] text". A changed part must be at most N characters and at least 85% of its original length.
-- Never change names, contact details, company names, job titles, dates, locations, school names, degrees or section headings: leave those parts out.
-- Use the job's exact keywords and skill names. Put the job's required skills into the skills and summary parts and work them into bullets where they fit, even when the old resume does not show them.
-- Industry: if the job is in an industry the resume doesn't show (e.g. logistics, finance, retail), bring out the work that is closest to it (the kind of data, users, operations or problems) using the job's industry words, without claiming jobs, employers or experience the candidate doesn't have.
-- Keep the voice: bullets start with a verb and keep their numbers.${note ? '\n- ' + note : ''}
-Reply with ONLY this JSON: {"changes":[{"id":0,"text":"new text"}]} with only the parts you change.
-${missing.length ? `\nKeywords the resume is missing: ${missing.join(', ')}` : ''}${gaps.length ? `\nGaps a recruiter saw: ${gaps.join(' | ')}` : ''}
-
-RESUME
-${parts.filter((p) => p.text.length >= 12).map((p) => `[${p.id}|max ${p.max}] ${p.text}`).join('\n').slice(0, 14000)}
-
-JOB
-${job.title || ''}${job.company ? ' at ' + job.company : ''}
-${String(job.description || '').replace(/\s+/g, ' ').slice(0, 3500)}`;
-}
 
 // ---------- Word (.docx) ----------
 
@@ -127,61 +57,6 @@ function rfZipWrite(entries) {
 
 const rfXmlDec = (s) => s.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-f]+);/gi, (m, e) => ({ lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" })[e.toLowerCase()] ?? String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10)));
 const rfXmlEsc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-// Paragraphs with their text pieces (<w:t>), in document order. Old-Word copies of text boxes are skipped.
-function rfDocxParas(xml) {
-  const fallback = [...xml.matchAll(/<mc:Fallback>[\s\S]*?<\/mc:Fallback>/g)].map((m) => [m.index, m.index + m[0].length]);
-  const inFallback = (i) => fallback.some(([a, b]) => i > a && i < b);
-  const re = /<w:p(?=[\s>/])[^>]*?(\/?)>|<\/w:p>|<w:t(?=[\s>])[^>]*>([^<]*)<\/w:t>|<w:tab\/>/g;
-  const stack = [], out = [];
-  let m;
-  while ((m = re.exec(xml))) {
-    const s = m[0];
-    if (s.startsWith('</w:p')) { const p = stack.pop(); if (p?.ts.length && !inFallback(p.ts[0].start)) out.push(p); }
-    else if (s.startsWith('<w:p')) { if (!m[1]) stack.push({ ts: [], tab: false }); }
-    else if (s.startsWith('<w:tab')) { if (stack.length) stack[stack.length - 1].tab = true; }
-    else if (stack.length) stack[stack.length - 1].ts.push({ start: m.index, end: m.index + s.length, text: rfXmlDec(m[2]) });
-  }
-  for (const p of out) p.text = p.ts.map((x) => x.text).join('');
-  return out.sort((a, b) => a.ts[0].start - b.ts[0].start);
-}
-
-async function rfDocxOpen(bytes) {
-  const entries = rfZipRead(bytes);
-  const entry = entries.find((x) => x.name === 'word/document.xml');
-  if (!entry) throw new Error('No document text found in the .docx');
-  const xml = new TextDecoder().decode(entry.method === 0 ? entry.data : await rfStreamBytes(entry.data, new DecompressionStream('deflate-raw')));
-  // Lines split by tabs (title <tab> dates) keep their layout only when left alone.
-  const paras = rfDocxParas(xml).filter((p) => !p.tab && p.text.trim().length >= 2);
-  const parts = paras.map((p, id) => ({ id, text: p.text.trim(), max: Math.round(p.text.trim().length * 1.1) + 2 }));
-  return {
-    parts,
-    async apply(changes) {
-      const edits = [], used = new Set();
-      let changed = 0;
-      paras.forEach((p, id) => {
-        const t = changes.get(id);
-        if (!t || t === p.text.trim()) return;
-        const next = p.text.match(/^\s*/)[0] + t + p.text.match(/\s*$/)[0];
-        // Leading runs the new text still starts with (a bold "Skills:" label...) stay exactly as they are;
-        // the rest of the text goes into the next run, so it keeps that run's formatting.
-        const runs = p.ts.map((x) => x.text);
-        let acc = '', i = 0;
-        while (i < runs.length - 1 && runs[i] && next.startsWith(acc + runs[i])) acc += runs[i++];
-        runs[i] = next.slice(acc.length);
-        for (let k = i + 1; k < runs.length; k++) runs[k] = '';
-        p.ts.forEach((x, k) => { if (runs[k] !== x.text) edits.push({ start: x.start, end: x.end, text: `<w:t xml:space="preserve">${rfXmlEsc(runs[k])}</w:t>` }); });
-        used.add(id);
-        changed++;
-      });
-      let out = xml;
-      for (const e of edits.sort((a, b) => b.start - a.start)) out = out.slice(0, e.start) + e.text + out.slice(e.end);
-      const raw = new TextEncoder().encode(out);
-      Object.assign(entry, { method: 8, data: await rfStreamBytes(raw, new CompressionStream('deflate-raw')), crc: rfCrc32(raw), usize: raw.length });
-      return { bytes: rfZipWrite(entries), changed, skipped: 0, used };
-    },
-  };
-}
 
 // ---------- PDF ----------
 
@@ -498,6 +373,11 @@ function rfBlocks({ pieces, marks }) {
     // A leading space (the one after a "Skills:" label) belongs to this text and stays.
     b.prefix = b.segs[0].text.match(/^\s*/)[0] + (text.match(BULLET_RE) || [''])[0];
     b.text = text.replace(BULLET_RE, '').replace(/\s+/g, ' ').trim();
+    // For the ATS reader (resumedoc.js): a list item, bold, its size and where it starts.
+    b.bullet = BULLET_RE.test(b.prefix) || bulletAt(b.segs[0]);
+    b.strong = /bold|black|heavy|semibold|demi/i.test(b.segs[0].pieces[0].font?.base || '');
+    b.size = b.segs[0].size;
+    b.x0 = b.segs[0].x0;
   }
   return blocks;
 }
@@ -528,8 +408,11 @@ async function rfPdfOpen(bytes) {
     const streams = !c ? [] : c instanceof L.PDFArray ? c.asArray().map((r) => ctx.lookup(r)) : [c];
     const content = streams.map((s) => rfLatin1(s instanceof L.PDFRawStream ? L.decodePDFRawStream(s).decode() : s.getUnencodedContents ? s.getUnencodedContents() : s.getContents())).join('\n');
     const ops = rfParseOps(content);
-    return { page, content, blocks: rfBlocks(rfTextPieces(ops, fontOf)) };
+    const tp = rfTextPieces(ops, fontOf);
+    // blank: drawn letters with no text map (an ATS reads nothing there).
+    return { page, content, blocks: rfBlocks(tp), pieces: tp.pieces.length, blank: tp.pieces.filter((x) => x.text === '' && x.adv > 0.5).length, width: page.getWidth() };
   });
+  pages.forEach((pg, i) => pg.blocks.forEach((b) => (b.page = i)));
   const blocks = pages.flatMap((p) => p.blocks);
   blocks.forEach((b, id) => (b.id = id));
   const parts = blocks.filter((b) => b.text.length >= 2 && b.segs.every((s) => s.pieces.every((p) => p.ok))).map((b) => ({ id: b.id, text: b.text, max: b.text.length }));
@@ -541,6 +424,10 @@ async function rfPdfOpen(bytes) {
   const lacks = mainFrom ? [...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789,.;:-()/&%+\'!?'].filter((ch) => !mainFrom.has(ch)) : [];
   return {
     parts,
+    blocks,
+    pageCount: pages.length,
+    pageWidth: pages[0]?.width || 612,
+    stats: { pieces: pages.reduce((s, p) => s + p.pieces, 0), blank: pages.reduce((s, p) => s + p.blank, 0) },
     canWrite: (str) => !mainFrom || [...str].every((ch) => mainFrom.has(ch) || mainFrom.has(ch.normalize('NFKD').replace(/[̀-ͯ]/g, ''))),
     // Why a new text can't go in ('' = it fits): a letter the font lacks, or more room than the lines give.
     check(id, text) {

@@ -478,6 +478,7 @@
       .acts button { all:unset; cursor:pointer; flex:1; text-align:center; padding:9px 8px; border-radius:10px; border:1px solid var(--stroke); background:var(--card); font-size:13px; font-weight:600; }
       .acts button:hover { background:var(--hover); }
       .acts button[disabled] { opacity:.45; cursor:not-allowed; }
+      .acts select.mini { flex:1; min-width:0; font:inherit; font-size:12px; padding:6px; border-radius:10px; border:1px solid var(--stroke); background:var(--card); color:var(--text); }
       .acts button svg { width:14px; height:14px; vertical-align:-2px; margin-right:6px; }
       .fixbox { display:flex; flex-direction:column; gap:8px; }
       .fixlive { position:relative; overflow:hidden; padding:10px 12px; border-radius:12px; border:1px solid rgba(109,40,217,.28); background:linear-gradient(135deg,rgba(109,40,217,.1),rgba(192,38,211,.07)); color:#5b21b6; animation:fixin .28s ease; }
@@ -899,35 +900,133 @@
             <span style="flex:1"></span>${aiDown() ? '' : `<button class="link" id="reanalyze">${jobState.ai ? 'Re-analyze' : 'Analyze with AI'}</button>`}</div>`}`;
   }
 
-  // Match tab: { key, status: 'idle' | 'loading' | 'done', ai, error, fromFix }
+  // Match tab: { key, status: 'idle' | 'loading' | 'done', ai, error } - the overall fit (quick from the profile, or AI).
   let matchState = { key: '' };
-  // The resume fixed for this job: its text, and the ATS score shown just before the fix.
-  let fixedText = { key: '', text: '', before: null };
   const matchKeyOf = (job, p) => job.url.split('#')[0] + '|' + job.title + '|' + p.id;
-  const fixedFor = (key) => (fixedText.key === key ? fixedText.text : '');
-  // keywords: score these exact keywords (the list shown before the fix), so before and after compare.
-  function runMatchAI(job, p, force, resumeText, keywords) {
+  function runMatchAI(job, p, force) {
     const key = matchKeyOf(job, p);
     const prev = matchState.key === key ? matchState.ai : null;
-    matchState = { key, status: 'loading', fromFix: !!resumeText, ai: prev };
+    matchState = { key, status: 'loading', ai: prev };
     render();
-    api.send({ type: 'analyzeMatch', profile: p, job: { title: job.title, company: job.company, url: job.url, description: job.description }, force, resumeText, keywords }).then((r) => {
+    api.send({ type: 'analyzeMatch', profile: p, job: { title: job.title, company: job.company, url: job.url, description: job.description }, force }).then((r) => {
       if (matchState.key !== key) return;
-      matchState = r.ok ? { key, status: 'done', ai: r.match, fromFix: !!resumeText } : { key, status: 'done', error: r.error || 'AI failed', ai: prev };
+      matchState = r.ok ? { key, status: 'done', ai: r.match } : { key, status: 'done', error: r.error || 'AI failed', ai: prev };
       render();
     });
   }
-  // After Fix resume lands, score again the same way as before the fix: the quick score now reads the new
-  // resume text too; an AI score is asked again for the same keywords. Two different methods (or two
-  // different keyword lists) would make the numbers jump for reasons that have nothing to do with the resume.
-  function refreshMatchAfterFix(job, p, resumeText) {
-    if (!resumeText || !job?.description || job.description.length < 200) { render(); return; }
-    const key = matchKeyOf(job, p);
-    const ai = matchState.key === key ? matchState.ai : null;
-    const before = ai?.ats ?? matchAnalysis(job, p, fixedFor(key)).ats;
-    fixedText = { key, text: resumeText, before };
-    if (ai && !aiDown()) runMatchAI(job, p, true, resumeText, (ai.keywords || []).map((k) => k.k));
-    else render();
+
+  // ---------- Estimated ATS match (ats.js in the background reads the resume file itself) ----------
+  // atsState: the score of the profile's resume file for this job. atsMade: the optimizer's last file for this
+  // job (kept only in this page, until it is used for the application).
+  let atsState = { key: '', status: 'idle' };
+  let atsMade = { key: '', file: null, before: null, after: null, used: '' };
+  let atsPick = ''; // resume chosen in the Match tab
+  const atsResumeId = (p) => {
+    const list = p.resumes || [];
+    const id = atsPick || pickedResume || api.chooseResume(p)?.id || '';
+    return list.some((r) => r.id === id) ? id : list[0]?.id || '';
+  };
+  const atsKeyOf = (job, p) => matchKeyOf(job, p) + '|' + atsResumeId(p);
+  const atsJob = (job) => ({ title: job.title, company: job.company, url: job.url, description: job.description });
+  // A score made before (the job already read by the AI) shows again without asking the AI.
+  function atsLoad(job, p) {
+    const key = atsKeyOf(job, p);
+    if (atsState.key === key) return;
+    atsState = { key, status: 'idle' };
+    if (!atsResumeId(p)) return;
+    api.send({ type: 'atsScore', cachedOnly: true, profile: p, resumeId: atsResumeId(p), job: atsJob(job) }).then((r) => {
+      if (atsState.key !== key || atsState.status !== 'idle') return;
+      if (r.ok && r.result) { atsState = { key, status: 'done', res: r.result }; if (data.panelTab === 'match') render(); }
+    });
+  }
+  function runAts(force) {
+    const job = api.getJob(), p = activeProfile();
+    const key = atsKeyOf(job, p);
+    atsState = { key, status: 'loading', res: atsState.key === key ? atsState.res : null };
+    render();
+    api.send({ type: 'atsScore', force, profile: p, resumeId: atsResumeId(p), job: atsJob(job) }).then((r) => {
+      if (atsState.key !== key) return;
+      atsState = r.ok && r.result ? { key, status: 'done', res: r.result } : { key, status: 'error', error: r.error || 'Failed', res: atsState.res };
+      render();
+    });
+  }
+  // The optimized file goes into this form's resume box, or waits (session only) for the application form.
+  async function useOptimized(file) {
+    const p = activeProfile();
+    const slot = allItems().find((x) => x.name === 'Resume/CV');
+    if (slot) {
+      const n = await uploadFixed(slot, file);
+      if (n) { atsMade.used = 'uploaded'; setTimeout(schedule, 600); render(); return `${file.name} (score ${file.score}) is in this form's resume box. Only for this application.`; }
+      return 'The site would not take the upload. Download it and use the site\'s own upload button.';
+    }
+    await api.send({ type: 'holdFixedResume', file, profileId: p.id });
+    atsMade.used = 'held';
+    render();
+    return `${file.name} (score ${file.score}) goes into the application form's resume box when you open it and press Fill. Only for this application.`;
+  }
+  async function uploadFixed(slot, file) {
+    if (slot.frame) { frameWindows[slot.frame - 1]?.postMessage({ __jobbid: 'attach', fixed: file }, '*'); return 1; }
+    return api.attachResumeNow('', file);
+  }
+  function openOptimizer(step) {
+    const job = api.getJob(), p = activeProfile();
+    const opt = window.__jobbidOptimizer;
+    if (!opt) return api.toast({ kind: 'warn', title: 'Reload the page', msg: 'The optimizer was added after this page opened.', ms: 6000 });
+    if (atsState.status !== 'done') return;
+    const key = atsState.key;
+    opt.open({
+      api, profile: p, job: atsJob(job), resumeId: atsResumeId(p), result: atsState.res, step, theme: data.settings.theme, useFile: useOptimized,
+      onScored: (res) => { if (atsState.key === key) { atsState = { key, status: 'done', res }; render(); } },
+      onBuilt: (b) => { atsMade = { key, file: b.file, before: b.history[0], after: b.after.score, used: '' }; render(); },
+    });
+  }
+  function downloadFile(f) {
+    const bin = atob(f.data), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: f.type }));
+    const a = document.createElement('a');
+    a.href = url; a.download = f.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  function atsCard(p, job) {
+    atsLoad(job, p);
+    const list = p.resumes || [];
+    const pick = list.length > 1 ? `<select id="atsResume" class="mini" title="Resume file to score">${list.map((r) => `<option value="${esc(r.id)}" ${r.id === atsResumeId(p) ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>` : '';
+    if (!list.length) return `<div class="card"><b>Estimated ATS match</b><div class="t2" style="margin-top:4px">Add a resume file (PDF or Word) to ${esc(pname(p))} in the dashboard to score it against this job.</div></div>`;
+    const s = atsState;
+    const st = data.aiStatus || {};
+    if (s.status === 'loading') {
+      return `<div class="card"><b>Estimated ATS match</b><div class="thinking" style="margin-top:6px"><span class="spin"></span>${esc((st.state === 'working' && st.stage) || 'Reading the job and the resume...')}</div></div>`;
+    }
+    if (s.status !== 'done') {
+      return `<div class="card"><div class="ats"><div class="grow"><b>Estimated ATS match</b>
+          <div class="t2">Checks your resume file against this job's requirements: keywords, skills shown in experience, title, years, education and layout. The AI reads the job once; the scoring itself is the same every time.</div></div></div>
+        ${s.status === 'error' ? `<div class="bar-info err" style="margin-top:8px">${svg('alert')}<span class="grow">${esc(s.error)}</span></div>` : ''}
+        <div class="acts" style="margin-top:8px">${pick}${aiDown() ? '<span class="t2">Needs a working AI key to read the job.</span>' : `<button id="atsRun">${svg('target')}${s.status === 'error' ? 'Try again' : 'Score my resume'}</button>`}</div></div>`;
+    }
+    const r = s.res.report;
+    const made = atsMade.key === s.key && atsMade.file;
+    const miss = r.requirements.filter((x) => x.status === 'missing' && x.category !== 'responsibility');
+    const part = r.requirements.filter((x) => x.status === 'partial' && x.category !== 'responsibility');
+    const listed = r.requirements.filter((x) => x.status === 'matched' && !x.demonstrated && x.category !== 'responsibility' && x.category !== 'soft');
+    const c = (v) => (v >= 75 ? 'var(--ok)' : v >= 55 ? 'var(--warn)' : 'var(--err)');
+    const chip = (x, cls) => `<span class="chip ${cls}" title="${esc(x.importance)}${x.via ? ' · related: ' + esc(x.via) : ''}">${esc(x.term)}</span>`;
+    return `<div class="card">
+        <div class="ats"><div class="grow"><b>Estimated ATS match</b><div class="t2 ellip" translate="no">${esc(s.res.resume.name)} · an estimate, not the employer's score</div></div>
+          <div class="num" style="color:${c(r.score)}">${Math.round(r.score)}<small>/100</small></div></div>
+        ${made ? `<div class="bar-info" style="margin-top:8px">${svg('check')}<span class="grow">Optimized version: <b>${Math.round(atsMade.after)}</b> (was ${Math.round(atsMade.before)})${atsMade.used === 'uploaded' ? ' · uploaded' : atsMade.used === 'held' ? ' · waiting for the form' : ''}</span>
+          <button class="link" id="atsUse">Use</button><button class="link" id="atsDown">Download</button></div>` : ''}
+        <div class="mbars">${r.components.map((x) => { const pct = x.max ? Math.round((x.points / x.max) * 100) : 0; return `<div class="mbar"><span>${esc(x.label)}</span><b style="color:${c(pct)}">${Math.round(x.points * 10) / 10}/${Math.round(x.max)}</b><span class="tr"><i style="width:${pct}%;background:${c(pct)}"></i></span></div>`; }).join('')}</div>
+        <div class="grp" style="margin-top:12px">Requirements: ${r.counts.matched} matched · ${r.counts.partial} partly · ${r.counts.missing} missing</div>
+        ${miss.length ? `<div class="chips" translate="no">${miss.slice(0, 10).map((x) => chip(x, 'miss')).join('')}${miss.length > 10 ? `<span class="chip miss">+${miss.length - 10}</span>` : ''}</div>` : ''}
+        ${part.length ? `<div class="chips" translate="no" style="margin-top:4px">${part.slice(0, 8).map((x) => chip(x, 'close')).join('')}</div>` : ''}
+        ${listed.length ? `<div class="t2" style="margin-top:6px;font-size:11.5px">Listed but not shown in work experience: ${listed.slice(0, 6).map((x) => esc(x.term)).join(', ')}</div>` : ''}
+        ${r.warnings.length ? `<div class="bar-info warn" style="margin-top:8px">${svg('warn')}<span class="grow">${r.warnings.length} formatting warning${r.warnings.length === 1 ? '' : 's'}: ${esc(r.warnings[0])}</span></div>` : ''}
+        <div class="acts" style="margin-top:10px">${pick}<button id="atsDetail" class="ghost">Details</button><button id="atsOpt">${svg('spark')}Optimize resume</button></div>
+        <div class="row" style="display:flex;align-items:center;gap:8px;color:var(--t3);font-size:11px;margin-top:6px">Job read by AI · resume scored by rules<span style="flex:1"></span><button class="link" id="atsRescore">Re-score</button></div>
+      </div>`;
   }
 
   function matchTab(p) {
@@ -935,7 +1034,7 @@
     if (!job.description || job.description.length < 200) {
       return `<div class="card empty-note">Open a job posting to see how well ${esc(pname(p))} fits it.</div>`;
     }
-    const key = job.url.split('#')[0] + '|' + job.title + '|' + p.id;
+    const key = matchKeyOf(job, p);
     if (matchState.key !== key) {
       // An earlier AI score for this job and profile shows again without asking the AI.
       matchState = { key, status: 'idle' };
@@ -943,19 +1042,15 @@
         if (matchState.key === key && r.ok && r.match && !matchState.ai) { matchState = { key, status: 'done', ai: r.match }; if (data.panelTab === 'match') render(); }
       });
     }
-    const fixed = fixedFor(key);
-    const quick = matchAnalysis(job, p, fixed);
-    let ai = matchState.ai;
-    // A keyword written in the profile or the fixed resume is there, whatever the AI said.
-    if (ai?.keywords?.length) {
-      const corpus = profileText(p) + '\n' + fixed.toLowerCase();
-      ai = { ...ai, keywords: ai.keywords.map((k) => (k.have || !k.k ? k : { ...k, have: has(corpus, k.k.toLowerCase()) })) };
-    }
-    // Only the AI's readable numbers replace the quick ones (an old result with every score 0 was a misread reply).
-    const aiNums = ai ? Object.fromEntries(['overall', 'experience', 'skills', 'industry', 'title', 'ats'].map((k) => [k, ai[k]]).filter(([, v]) => typeof v === 'number')) : {};
-    const allZero = Object.keys(aiNums).length >= 5 && Object.values(aiNums).every((v) => v === 0);
-    const m = ai ? { ...quick, ...ai, ...quick, ...(allZero ? {} : aiNums), keywords: ai.keywords?.length ? ai.keywords : quick.keywords,
-      tips: quick.tips, need: quick.need, yrs: quick.yrs } : quick;
+    const quick = matchAnalysis(job, p);
+    const ai = matchState.ai;
+    const aiNums = ai ? Object.fromEntries(['overall', 'experience', 'skills', 'industry', 'title'].map((k) => [k, ai[k]]).filter(([, v]) => typeof v === 'number')) : {};
+    const allZero = Object.keys(aiNums).length >= 4 && Object.values(aiNums).every((v) => v === 0);
+    const m = ai ? { ...quick, ...(allZero ? {} : aiNums) } : { ...quick };
+    // With the resume scored, the Skills bar is its weighted keyword coverage (the job's own requirements).
+    const rep = atsState.key === atsKeyOf(job, p) && atsState.res ? atsState.res.report : null;
+    const kwc = rep?.components.find((x) => x.key === 'keywords');
+    if (kwc && !ai) m.skills = Math.round((kwc.points / kwc.max) * 100);
     const loading = matchState.status === 'loading';
     const color = (v) => (v >= 75 ? 'var(--ok)' : v >= 55 ? 'var(--warn)' : 'var(--err)');
     const verdict = m.overall >= 80 ? 'Strong match' : m.overall >= 65 ? 'Good match' : m.overall >= 50 ? 'Fair match' : 'Low match';
@@ -964,11 +1059,11 @@
       <span class="tr"><i style="width:${v}%;background:${color(v)}"></i></span>${note ? `<span class="note" translate="no">${esc(note)}</span>` : ''}</div>`;
     const expNote = quick.need != null && quick.yrs != null ? `Job asks ~${quick.need}+ yrs · profile has ${quick.yrs}` : quick.yrs != null ? `Profile has ${quick.yrs} yrs` : '';
     const indNote = (ai?.industries?.length ? ai.industries : quick.jobInd).join(', ');
-    const s = quick.skillInfo;
-    const skillNote = s ? `${s.have.length} of ${s.wanted.length} skills${s.related.length ? `, ${s.related.length} related` : ''}` : '';
-    const have = m.keywords.filter((k) => k.have).length;
-    const atsColor = m.ats >= 7.5 ? 'var(--ok)' : m.ats >= 6 ? 'var(--warn)' : 'var(--err)';
+    const skillNote = kwc && !ai ? `${rep.counts.matched} of ${rep.counts.total} job requirements in the resume` : '';
     const li = (arr) => `<ul class="mlist">${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+    // How to improve: the score's biggest deductions once the resume is scored.
+    const tips = ai?.tips?.length ? ai.tips : rep ? rep.components.flatMap((x) => x.deductions.map((d) => ({ ...d }))).sort((a, b) => b.points - a.points).slice(0, 4).map((d) => `${d.text} (-${d.points})`)
+      : quick.tips.filter((t) => !/^Add these words/.test(t));
     return `
       <div class="cap">Match for ${esc(pname(p))}</div>
       <div class="card">
@@ -981,130 +1076,29 @@
         </div>
         <div class="mbars">
           ${bar('Experience level', m.experience, expNote)}
-          ${bar('Skills', m.skills, ai ? '' : skillNote)}
+          ${bar('Skills', m.skills, skillNote)}
           ${bar('Industry experience', m.industry, indNote ? `Job: ${indNote}` : 'No specific industry in the posting')}
           ${bar('Job title', m.title, quick.myTitle ? `Yours: ${quick.myTitle}` : '')}
         </div>
-      </div>
-      <div class="card">
-        <div class="ats"><div class="grow"><b>Resume ATS score</b><div class="t2">Job keywords written in the profile/resume, title and industry</div></div>
-          <div class="num" style="color:${atsColor}">${m.ats.toFixed(1)}<small>/10</small></div></div>
-        ${fixed && fixedText.before != null && !loading ? `<div class="t2" style="margin-top:4px">With the fixed resume · before the fix: ${fixedText.before.toFixed(1)}</div>` : ''}
-        ${m.ats < 6 ? `<div class="bar-info err" style="margin-top:8px">${svg('alert')}<span class="grow">Under 6.0 is often filtered out by an ATS.</span></div>` : ''}
-        ${m.keywords.length ? `<div class="grp">ATS keywords (${have}/${m.keywords.length})</div>
-          <div class="chips" translate="no">${m.keywords.map((k) => `<span class="chip ${k.have ? '' : k.close ? 'close' : 'miss'}" title="${k.have ? 'In the resume' : k.close ? 'A related skill is in the resume (partial credit) - add this exact word if you have used it' : 'Not in the resume'}">${k.have ? '✓ ' : k.close ? '≈ ' : ''}${esc(k.k)}</span>`).join('')}</div>` : ''}
-        ${quick.jobInd.length && !ai ? `<div class="grp">Industry</div><div class="chips" translate="no">${quick.jobInd.map((x) => `<span class="chip ${quick.shared.includes(x) ? '' : 'miss'}">${esc(x)}</span>`).join('')}</div>` : ''}
-      </div>
-      ${ai?.strengths?.length ? `<div class="card"><b>Strengths</b>${li(ai.strengths)}</div>` : ''}
-      ${(ai?.gaps?.length || 0) + (ai?.tips?.length || 0) || quick.tips.length ? `<div class="card">
-          ${ai?.gaps?.length ? `<b>Gaps</b>${li(ai.gaps)}` : ''}
-          <b style="display:block;${ai?.gaps?.length ? 'margin-top:8px' : ''}">How to improve</b>${li(ai?.tips?.length ? ai.tips : quick.tips)}</div>` : ''}
-      ${loading ? `<div class="thinking"><span class="spin"></span>${matchState.fromFix ? 'Updating match for the fixed resume...' : 'AI is scoring the match...'}</div>`
-        : `<div class="row" style="display:flex;align-items:center;gap:8px;color:var(--t3);font-size:11px">${matchState.error ? `AI failed: ${esc(matchState.error)}` : ai ? (fixed ? 'Scored by AI with the fixed resume' : 'Scored by AI') : fixed ? 'Quick score with the fixed resume' : 'Quick score from the page and profile'}
+        ${loading ? `<div class="thinking"><span class="spin"></span>AI is scoring the fit...</div>`
+    : `<div class="row" style="display:flex;align-items:center;gap:8px;color:var(--t3);font-size:11px;margin-top:8px">${matchState.error ? `AI failed: ${esc(matchState.error)}` : ai ? 'Fit scored by AI from the profile' : 'Quick fit from the profile'}
             <span style="flex:1"></span>${aiDown() ? '' : `<button class="link" id="matchAI">${ai ? 'Re-score' : 'Score with AI'}</button>`}</div>`}
-      ${fixButton(allItems())}`;
+      </div>
+      ${atsCard(p, job)}
+      ${ai?.strengths?.length ? `<div class="card"><b>Strengths</b>${li(ai.strengths)}</div>` : ''}
+      ${(ai?.gaps?.length || 0) + tips.length ? `<div class="card">
+          ${ai?.gaps?.length ? `<b>Gaps</b>${li(ai.gaps)}` : ''}
+          <b style="display:block;${ai?.gaps?.length ? 'margin-top:8px' : ''}">How to improve</b>${li(tips)}</div>` : ''}`;
   }
 
-  // "Fix resume": the AI rewrites the words of the resume file (PDF or Word, same look) for this job. With an
-  // upload box on the page it goes straight in; on the job posting it waits (session memory) for the application
-  // form and goes in there. Never saved or synced, and dropped once used.
-  let fixState = { key: '', status: '' };
-  function fixButton(items) {
-    if (aiDown()) return '';
-    const slot = items.find((x) => x.name === 'Resume/CV');
-    const mine = fixState.key === jobKeyOf(api.getJob());
-    const busy = mine && fixState.status === 'loading';
-    const held = mine && fixState.status === 'held';
-    const ok = mine && fixState.status === 'ok';
-    const err = mine && fixState.status === 'error';
-    const noFile = !(activeProfile()?.resumes || []).length;
-    const st = data.aiStatus || {};
-    const secs = busy && (fixState.startedAt || st.startedAt)
-      ? Math.max(0, Math.round((Date.now() - new Date(fixState.startedAt || st.startedAt)) / 1000)) : 0;
-    const live = busy ? ((st.state === 'working' && st.stage) || 'Sending the resume to AI...') : '';
-    const tip = noFile ? 'Add a resume file (PDF or Word) to this profile first'
-      : held && !slot ? 'Ready - it goes into the resume box when you open the application form (Apply)'
-        : held && slot ? 'Attach the AI-fixed resume into this form\'s resume box'
-          : `AI rewrites the words of your resume file for this job (same layout and style) and ${slot ? 'uploads it here' : 'puts it into the application form when you open it'} - one use, not saved`;
-    let liveHtml = '';
-    if (busy) {
-      liveHtml = `<div class="fixlive" id="fixLive">
-        <div class="fixrow"><span class="spin"></span><span class="grow"><b>Fixing resume</b><span class="fixdots"></span></span><b class="fixsecs">${secs}s</b></div>
-        <div class="fixstage" id="fixStage">${esc(live)}</div>
-        <div class="fixbar"><i></i></div>
-      </div>`;
-    } else if (held) {
-      liveHtml = `<div class="fixlive held">${svg('check')}<div class="grow"><b>Fixed resume ready</b><div class="t2">${esc(fixState.note || (slot ? 'Press the button to attach it' : 'Press Apply - it goes into the form'))}</div></div></div>`;
-    } else if (ok) {
-      liveHtml = `<div class="fixlive ok">${svg('check')}<div class="grow"><b>Resume fixed for this job</b><div class="t2">${esc(fixState.note || '')}</div></div></div>`;
-    } else if (err) {
-      liveHtml = `<div class="fixlive err">${svg('alert')}<div class="grow"><b>Fix failed</b><div class="t2">${esc(fixState.note || '')}</div></div></div>`;
-    }
-    const label = busy ? 'Fixing resume...' : held && !slot ? 'Waiting for Apply' : held && slot ? 'Attach fixed resume' : ok ? 'Fix again' : err ? 'Try again' : 'Fix resume for this job';
-    const cls = busy ? 'fix-busy' : held ? 'fix-held' : ok ? 'fix-ok' : '';
-    const disabled = busy || noFile || (held && !slot);
-    return `<div class="fixbox">${liveHtml}<div class="acts"><button id="fixResume" class="${cls}" ${disabled ? 'disabled' : ''} title="${esc(tip)}">${svg(held || ok ? 'check' : 'spark')}${label}</button></div></div>`;
-  }
-  async function uploadFixed(slot, file) {
-    if (slot.frame) { frameWindows[slot.frame - 1]?.postMessage({ __jobbid: 'attach', fixed: file }, '*'); return 1; }
-    return api.attachResumeNow('', file);
-  }
-  async function onFixResume() {
+  // Apply tab: the optimizer's file for this job, ready to use; else a way to make one.
+  function optimizedRow() {
     const job = api.getJob(), p = activeProfile();
-    if (!p) return;
-    const slot = allItems().find((x) => x.name === 'Resume/CV');
-    // Fixed on the posting page, now on the form: use that one.
-    if (slot) {
-      const held = await api.send({ type: 'takeFixedResume', profileId: p.id });
-      if (held.ok && held.file) {
-        const n = await uploadFixed(slot, held.file);
-        if (n) {
-          api.send({ type: 'dropFixedResume' });
-          fixState = { key: jobKeyOf(job), status: 'ok', note: 'Uploaded into this form · one use, not saved', changed: held.file.changed };
-          api.toast({ kind: 'ok', title: 'Fixed resume uploaded', msg: `${held.file.name}, made for this job. Only for this application.`, ms: 7000 });
-          if (held.file.text) refreshMatchAfterFix(job, p, held.file.text);
-        }
-        setTimeout(schedule, 600);
-        render();
-        return;
-      }
+    if (atsMade.file && p && atsMade.key.startsWith(matchKeyOf(job, p))) {
+      return `<div class="bar-info" style="margin-top:8px">${svg('check')}<span class="grow">Optimized resume for this job: score <b>${Math.round(atsMade.after)}</b>${atsMade.used === 'uploaded' ? ' · uploaded' : ''}</span><button class="link" id="atsUse">Use</button><button class="link" id="atsDown">Download</button></div>`;
     }
-    const key = jobKeyOf(job);
-    const m = matchState.key === job.url.split('#')[0] + '|' + job.title + '|' + p.id ? matchState.ai : null;
-    const quick = job.description?.length >= 200 ? matchAnalysis(job, p, fixedFor(matchKeyOf(job, p))) : null;
-    const missing = ((m?.keywords?.length ? m.keywords : quick?.keywords) || []).filter((k) => !k.have).map((k) => k.k).slice(0, 15);
-    fixState = { key, status: 'loading', startedAt: new Date().toISOString() };
-    render();
-    const resumeId = pickedResume || api.chooseResume(p)?.id;
-    const r = await api.send({ type: 'fixResume', profile: p, resumeId, job: { title: job.title, company: job.company, url: job.url, description: job.description }, gaps: m?.gaps || [], missing });
-    if (!r.ok) {
-      fixState = { key, status: 'error', note: r.error || 'AI failed' };
-      render();
-      return api.toast({ kind: 'err', title: 'Fix resume failed', msg: r.error, ms: 9000 });
-    }
-    if (!r.file.changed) {
-      fixState = { key, status: 'error', note: r.file.why || 'New text did not fit the original lines or font' };
-      render();
-      return api.toast({ kind: 'warn', title: 'Resume not changed', msg: r.file.why || 'The AI\'s new text did not fit the original lines or font. Try again.', ms: 9000 });
-    }
-    const note = `${r.file.changed} part${r.file.changed === 1 ? '' : 's'} rewritten, same layout${r.file.skipped ? ` (${r.file.skipped} kept as they were)` : ''}`;
-    if (!slot) {
-      await api.send({ type: 'holdFixedResume', file: r.file, profileId: p.id });
-      fixState = { key, status: 'held', note, changed: r.file.changed };
-      api.toast({ kind: 'ok', title: 'Fixed resume ready', msg: `${note}. Press Apply - it goes into the application form's resume box (only for this application).`, ms: 9000 });
-      refreshMatchAfterFix(job, p, r.file.text);
-      return;
-    }
-    const n = await uploadFixed(slot, r.file);
-    fixState = n
-      ? { key, status: 'ok', note: `${note} · uploaded`, changed: r.file.changed }
-      : { key, status: 'error', note: 'Fixed, but the site would not take the upload' };
-    api.toast(n
-      ? { kind: 'ok', title: 'Fixed resume uploaded', msg: `${r.file.name}: ${note}. Only for this application.`, ms: 8000 }
-      : { kind: 'warn', title: 'Could not upload the fixed resume', msg: 'Use the site\'s own upload button for this form.', ms: 6000 });
-    setTimeout(schedule, 600);
-    if (n) refreshMatchAfterFix(job, p, r.file.text);
-    else render();
+    if ((job.description || '').length >= 200 && !aiDown()) return `<div class="minis" style="margin-top:6px"><button class="link" id="toMatch">${svg('target')}Score and optimize the resume for this job</button></div>`;
+    return '';
   }
 
   function applyTab(p, items) {
@@ -1152,7 +1146,7 @@
         </div>`
         : `<div class="card empty-note">No application form on this page yet. Click the job's Apply button, then come back to this tab.</div>`}
       <div class="acts"><button id="log">Log application</button><button id="cover" ${down === 'none' ? 'disabled title="Add an AI key in the dashboard to write cover letters"' : ''}>Cover letter</button></div>
-      ${fixButton(items)}
+      ${optimizedRow()}
       ${items.some((x) => x.status === 'missing' || x.status === 'empty') ? `<div class="minis"><button class="link" id="saveQs" title="Add every unanswered question on this page to Saved answers">${svg('save')}Save unanswered questions</button></div>` : ''}
       ${coverText ? `<div class="card"><div class="grp" style="margin-top:0">Cover letter</div><textarea id="coverText">${esc(coverText)}</textarea>
         <div style="display:flex;gap:10px;margin-top:6px"><button class="link" id="copyCover">Copy</button><button class="link" style="color:var(--t2)" id="closeCover">Close</button></div></div>` : ''}`;
@@ -1456,7 +1450,14 @@
     $('fixAi')?.addEventListener('click', () => openPage('#ai'));
     $('ipline')?.addEventListener('click', () => api.send({ type: 'getIp', force: true }));
     $('reanalyze')?.addEventListener('click', () => { ensureJobAnalysis(api.getJob(), true); render(); });
-    $('matchAI')?.addEventListener('click', () => { const j = api.getJob(); runMatchAI(j, p, true, fixedFor(matchKeyOf(j, p)) || undefined); });
+    $('matchAI')?.addEventListener('click', () => runMatchAI(api.getJob(), p, true));
+    $('atsRun')?.addEventListener('click', () => runAts(false));
+    $('atsRescore')?.addEventListener('click', () => runAts(true));
+    $('atsOpt')?.addEventListener('click', () => openOptimizer('choose'));
+    $('atsDetail')?.addEventListener('click', () => openOptimizer('score'));
+    $('atsResume')?.addEventListener('change', (e) => { atsPick = e.target.value; render(); });
+    $('atsUse')?.addEventListener('click', async () => { const msg = await useOptimized(atsMade.file); api.toast({ kind: 'ok', title: 'Optimized resume', msg, ms: 7000 }); });
+    $('atsDown')?.addEventListener('click', () => downloadFile(atsMade.file));
     $('toMatch')?.addEventListener('click', () => { data.panelTab = 'match'; store.set({ panelTab: 'match' }); render(); });
     $('log')?.addEventListener('click', () => api.logApplication(activeProfile()));
     $('saveQs')?.addEventListener('click', async () => {
@@ -1466,7 +1467,6 @@
         : { kind: 'info', title: 'No new questions to save', msg: 'Every unanswered question here is already in Saved answers or comes from the profile.', ms: 5000 });
     });
     $('cover')?.addEventListener('click', onCover);
-    $('fixResume')?.addEventListener('click', onFixResume);
     $('copyCover')?.addEventListener('click', async () => { await navigator.clipboard.writeText($('coverText').value); api.toast({ kind: 'ok', title: 'Copied', ms: 2500 }); });
     $('closeCover')?.addEventListener('click', () => { coverText = ''; render(); });
     $('foldOpt')?.addEventListener('click', () => { showOptional = !showOptional; render(); });
@@ -1583,19 +1583,9 @@
     }
     return '';
   }
-  // While the AI works, refresh the seconds / live Fix resume stage once a second.
+  // While the AI works, refresh the seconds once a second.
   setInterval(() => {
     if (aiAsking.size && root.querySelector('.aist.working')) { const el = root.querySelector('.aist.working'); el.outerHTML = aiStatusHtml(); }
-    const live = root.querySelector('#fixLive');
-    if (live && fixState.status === 'loading') {
-      const st = data.aiStatus || {};
-      const start = fixState.startedAt || st.startedAt;
-      const secs = start ? Math.max(0, Math.round((Date.now() - new Date(start)) / 1000)) : 0;
-      const secsEl = live.querySelector('.fixsecs');
-      const stageEl = live.querySelector('#fixStage');
-      if (secsEl) secsEl.textContent = secs + 's';
-      if (stageEl && st.state === 'working' && st.stage) stageEl.textContent = st.stage;
-    }
   }, 1000);
 
   // A fill running (from this button, Shift+Alt+F or Auto bid; a form in a frame counts from the button
