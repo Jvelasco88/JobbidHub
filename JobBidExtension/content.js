@@ -1361,6 +1361,17 @@
     return t && !PLACEHOLDER.test(t) ? t : '';
   }
 
+  // A Location / City box the site filled itself with another city than the profile's (from the visitor's
+  // internet address, "Burlingame, California", or from the resume it read): replaced with the profile's.
+  function otherCity(f, p) {
+    const city = norm(cityOnly(p));
+    if (city.length < 3 || !f.el) return false;
+    const rule = fittingRule(f, p);
+    if (!rule || !(rule.key === 'city' || /^current location/.test(rule.re?.source || ''))) return false;
+    const shown = f.kind === 'combobox' ? comboShown(f.el) || String(f.el.value || '') : String(f.el.value || '');
+    return !!norm(shown) && !` ${norm(shown)} `.includes(` ${city} `);
+  }
+
   function hasValue(f) {
     if (f.kind === 'combobox' && f.el && comboShown(f.el)) return true;
     // A search-style dropdown with nothing chosen: typed search text is not an answer.
@@ -2868,7 +2879,7 @@
           if (fixed && fixed !== cur) { setNative(f.el, fixed); mark(f, 'rule'); filled++; }
           continue;
         }
-        if (!ctx.settings.overwrite && hasValue(f)) continue;
+        if (!ctx.settings.overwrite && hasValue(f) && !otherCity(f, p)) continue;
         // A box without a readable question never takes a saved answer (one saved under "" went everywhere).
         const saved = savedAnswer(f, answers);
         // Yes/No screening questions: the answer you (or the AI) gave this exact question beats the

@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Job Application - location the site filled in</title></head><body>
+<!-- 2026-11-09: the site filled Location before JobBid ("Burlingame, California, United States": the location of
+     the visitor's internet address, or the city on the resume it read). JobBid kept it because the box was not
+     empty. A Location / City the site filled with another city than the profile's is replaced; one that already
+     holds the profile's city is left alone. The profile's city is saved as "Chicago,IL". -->
+<form id="application-form" onsubmit="return false">
+  <div class="text-input-wrapper"><label for="first_name">First Name<span aria-hidden="true">*</span></label><input id="first_name" aria-required="true" type="text"></div>
+  <div class="select" data-id="loc" data-label="Location" data-search="city" data-required data-value="Burlingame, California, United States"></div>
+  <div class="select" data-id="loc2" data-label="Current location" data-search="city" data-value="Chicago, Illinois, United States"></div>
+  <div class="text-input-wrapper"><label for="city">City<span aria-hidden="true">*</span></label><input id="city" aria-required="true" type="text" value="San Mateo"></div>
+</form>
+<script src="react-select.js"></script>
+<script type="application/json" id="profile">{ "city": "Chicago,IL", "state": "IL", "country": "United States" }</script>
+<script type="application/json" id="expect">{ "checks": [
+  { "name": "First Name", "sel": "#first_name", "value": "Alex" },
+  { "name": "Location the site filled with another city", "sel": "[data-id=loc] .select__single-value", "text": "Chicago, Illinois, United States" },
+  { "name": "Location already the profile's city", "sel": "[data-id=loc2] .select__single-value", "text": "Chicago, Illinois, United States" },
+  { "name": "City the site filled with another city", "sel": "#city", "value": "Chicago" }
+] }</script>
+</body></html>

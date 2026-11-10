@@ -69,4 +69,6 @@ for (const root of document.querySelectorAll('.select[data-options], .select[dat
   });
   input.addEventListener('input', update);
   input.addEventListener('blur', () => setTimeout(close, 150));
+  // data-value: a choice the site already made (from the resume, or the visitor's IP location).
+  if (root.dataset.value) pick(root.dataset.value);
 }
